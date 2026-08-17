@@ -342,13 +342,53 @@ class TrtllmGenGemmRunner {
   int64_t selectHeuristic(int64_t m, int64_t n, int64_t k) const {
     if (mOptions.eltType == gemm::trtllm::gen::Dtype::E4m3) {
       return select_kernel_fp8(m, n, k, gemm::gemm::GemmInterface());
-    } else {
-      auto sortedIndices = getValidTactics(m, n, k);
-      TVM_FFI_ICHECK(!sortedIndices.empty()) << "No valid tactic found";
+    }
 
-      // the getValidTactics is sorted by priority, so the first one is the best one
+    auto sortedIndices = getValidTactics(m, n, k);
+    TVM_FFI_ICHECK(!sortedIndices.empty()) << "No valid tactic found";
+
+    if (mOptions.eltType != gemm::trtllm::gen::Dtype::MxE4m3) {
+      // The valid tactics are sorted by priority, so the first one is the best one.
       return sortedIndices[0];
     }
+
+    // MXFP8 transposes the MMA output, so the original M becomes the narrow
+    // output dimension. Avoid selecting a wide-N tile that mostly executes
+    // predicated work for decode-sized inputs.
+    auto const narrowN = mOptions.transposeMmaOutput ? m : n;
+    if (narrowN > 32) {
+      return sortedIndices[0];
+    }
+
+    auto const configs = gemm::gemm::GemmInterface().getGemmConfigs();
+    return *std::min_element(
+        sortedIndices.begin(), sortedIndices.end(), [&configs, narrowN](int64_t idx0, int64_t idx1) {
+          auto const& optionsA = configs[idx0].mOptions;
+          auto const& optionsB = configs[idx1].mOptions;
+          auto const tileNA = std::max<int64_t>(1, optionsA.mTileN);
+          auto const tileNB = std::max<int64_t>(1, optionsB.mTileN);
+          auto const tilesNA = (narrowN + tileNA - 1) / tileNA;
+          auto const tilesNB = (narrowN + tileNB - 1) / tileNB;
+          auto const coveredNA = tilesNA * tileNA;
+          auto const coveredNB = tilesNB * tileNB;
+
+          if (coveredNA != coveredNB) {
+            return coveredNA < coveredNB;
+          }
+          if (tilesNA != tilesNB) {
+            return tilesNA < tilesNB;
+          }
+          if (optionsA.mTileK != optionsB.mTileK) {
+            return optionsA.mTileK > optionsB.mTileK;
+          }
+          if (optionsA.mNumSlicesForSplitK != optionsB.mNumSlicesForSplitK) {
+            return optionsA.mNumSlicesForSplitK > optionsB.mNumSlicesForSplitK;
+          }
+          if (optionsA.mUseUnrollLoop2xForMma != optionsB.mUseUnrollLoop2xForMma) {
+            return optionsA.mUseUnrollLoop2xForMma;
+          }
+          return idx0 < idx1;
+        });
   }
 
  private:
