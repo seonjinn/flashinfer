@@ -231,6 +231,45 @@ def test_mm_mxfp8_cute_dsl_low_m(m, k):
     )
 
 
+def test_mm_mxfp8_trtllm_low_m_heuristic_uses_narrow_tile():
+    _skip_if_unsupported("trtllm")
+    m, n, k = 8, 8832, 8192
+    input = torch.randn([m, k], device="cuda", dtype=torch.bfloat16)
+    weight = torch.randn([n, k], device="cuda", dtype=torch.bfloat16)
+    input_mxfp8, weight_mxfp8, input_scale, weight_scale = (
+        _prepare_mxfp8_tensors(
+            input,
+            weight,
+            SfLayout.layout_8x4,
+            SfLayout.layout_128x4,
+            "trtllm",
+        )
+    )
+
+    def run() -> torch.Tensor:
+        return mm_mxfp8(
+            input_mxfp8,
+            weight_mxfp8.T,
+            input_scale,
+            weight_scale,
+            out_dtype=torch.bfloat16,
+            backend="trtllm",
+            use_8x4_sf_layout=True,
+        )
+
+    with autotune(False):
+        run()
+        torch.cuda.synchronize()
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CUDA]
+        ) as profiler:
+            run()
+        torch.cuda.synchronize()
+
+    kernel_names = {event.name for event in profiler.events()}
+    assert any("_t128x8x" in name for name in kernel_names), kernel_names
+
+
 def test_mm_mxfp8_invalid_input_dtype():
     _skip_if_unsupported()
     m, n, k = 128, 128, 128
