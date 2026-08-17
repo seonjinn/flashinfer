@@ -236,14 +236,12 @@ def test_mm_mxfp8_trtllm_low_m_heuristic_uses_narrow_tile():
     m, n, k = 8, 8832, 8192
     input = torch.randn([m, k], device="cuda", dtype=torch.bfloat16)
     weight = torch.randn([n, k], device="cuda", dtype=torch.bfloat16)
-    input_mxfp8, weight_mxfp8, input_scale, weight_scale = (
-        _prepare_mxfp8_tensors(
-            input,
-            weight,
-            SfLayout.layout_8x4,
-            SfLayout.layout_128x4,
-            "trtllm",
-        )
+    input_mxfp8, weight_mxfp8, input_scale, weight_scale = _prepare_mxfp8_tensors(
+        input,
+        weight,
+        SfLayout.layout_8x4,
+        SfLayout.layout_128x4,
+        "trtllm",
     )
 
     def run() -> torch.Tensor:
@@ -258,7 +256,9 @@ def test_mm_mxfp8_trtllm_low_m_heuristic_uses_narrow_tile():
         )
 
     with autotune(False):
-        run()
+        result = run()
+        reference = torch.mm(input, weight.T)
+        _assert_cosine_similarity(reference, result, use_float=True)
         torch.cuda.synchronize()
         with torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CUDA]
