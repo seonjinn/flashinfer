@@ -362,7 +362,8 @@ class TrtllmGenGemmRunner {
 
     auto const configs = gemm::gemm::GemmInterface().getGemmConfigs();
     return *std::min_element(
-        sortedIndices.begin(), sortedIndices.end(), [&configs, narrowN](int64_t idx0, int64_t idx1) {
+        sortedIndices.begin(), sortedIndices.end(),
+        [&configs, narrowN](int64_t idx0, int64_t idx1) {
           auto const& optionsA = configs[idx0].mOptions;
           auto const& optionsB = configs[idx1].mOptions;
           auto const tileNA = std::max<int64_t>(1, optionsA.mTileN);
