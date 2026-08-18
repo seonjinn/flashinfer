@@ -1,3 +1,5 @@
+from collections.abc import Generator
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -9,6 +11,7 @@ from flashinfer import (
     shuffle_matrix_a,
     shuffle_matrix_sf_a,
 )
+from flashinfer.autotuner import AutoTuner
 from flashinfer.fp8_quantization import mxfp8_quantize
 from flashinfer.gemm import gemm_base
 from flashinfer.utils import get_compute_capability
@@ -553,3 +556,72 @@ def test_trtllm_mxfp8_tuning_config_uses_exact_low_m_mapping() -> None:
     assert spec.gen_tuning_buckets(64) == tuple(range(1, 33)) + (64,)
     assert spec.map_to_tuning_buckets(3) == 3
     assert spec.map_to_tuning_buckets(33) == 64
+
+
+@pytest.mark.parametrize("m", [3, 4, 16, 32, 33])
+@pytest.mark.parametrize("use_8x4_sf_layout_for_a", [False, True])
+@pytest.mark.parametrize("auto_tuning", [False, True])
+def test_mm_mxfp8_trtllm_low_m(
+    m: int,
+    use_8x4_sf_layout_for_a: bool,
+    auto_tuning: bool,
+) -> None:
+    _run_mm_mxfp8(
+        m,
+        2688,
+        4096,
+        torch.bfloat16,
+        torch.bfloat16,
+        "trtllm",
+        auto_tuning=auto_tuning,
+        provide_out=True,
+        use_8x4_sf_layout_for_a=use_8x4_sf_layout_for_a,
+    )
+
+
+@pytest.fixture
+def reset_autotuner() -> Generator[None, None, None]:
+    AutoTuner._instance = None
+    try:
+        yield
+    finally:
+        AutoTuner._instance = None
+
+
+def test_mm_mxfp8_trtllm_exact_m_cache_round_trip(
+    tmp_path, reset_autotuner: None
+) -> None:
+    cache_path = tmp_path / "trtllm_mxfp8.json"
+    input_bf16 = torch.randn((3, 4096), device="cuda", dtype=torch.bfloat16)
+    weight_bf16 = torch.randn((2688, 4096), device="cuda", dtype=torch.bfloat16)
+    a, b, a_sf, b_sf = _prepare_mxfp8_tensors(
+        input_bf16,
+        weight_bf16,
+        SfLayout.layout_8x4,
+        SfLayout.layout_128x4,
+        "trtllm",
+    )
+
+    with autotune(True, cache=str(cache_path)):
+        tuned = mm_mxfp8(
+            a,
+            b.T,
+            a_sf,
+            b_sf,
+            backend="trtllm",
+            use_8x4_sf_layout=True,
+        )
+
+    AutoTuner._instance = None
+    with autotune(False, cache=str(cache_path)):
+        cached = mm_mxfp8(
+            a,
+            b.T,
+            a_sf,
+            b_sf,
+            backend="trtllm",
+            use_8x4_sf_layout=True,
+        )
+
+    assert cache_path.exists()
+    torch.testing.assert_close(cached, tuned, rtol=0, atol=0)
