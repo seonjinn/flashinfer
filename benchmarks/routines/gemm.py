@@ -60,6 +60,30 @@ def run_gemm_test(args):
         raise ValueError(f"Unsupported routine: {args.routine}")
 
 
+def _validate_dynamic_quant_backends(
+    dynamic_quant: bool,
+    dynamic_quant_layout: str,
+    backends: list[str],
+) -> None:
+    if not dynamic_quant:
+        return
+
+    supported_backends = {
+        "auto": ("trtllm",),
+        "8x4": ("trtllm",),
+        "128x4": ("trtllm", "cute-dsl"),
+    }
+    allowed_backends = supported_backends[dynamic_quant_layout]
+    unsupported_backends = [
+        backend for backend in backends if backend not in allowed_backends
+    ]
+    if unsupported_backends:
+        raise ValueError(
+            f"--dynamic_quant_layout {dynamic_quant_layout} supports only "
+            f"{', '.join(allowed_backends)}; got {', '.join(unsupported_backends)}"
+        )
+
+
 def parse_gemm_args(line, parser):
     """
     Parse command line arguments for gemm test configuration.
@@ -169,6 +193,19 @@ def parse_gemm_args(line, parser):
         help="Use 128x4 SF layout for the input and mat2.",
     )
     parser.add_argument(
+        "--dynamic_quant",
+        action="store_true",
+        default=False,
+        help="Measure BF16 activation quantization and MXFP8 GEMM together.",
+    )
+    parser.add_argument(
+        "--dynamic_quant_layout",
+        type=str,
+        default="auto",
+        choices=["auto", "8x4", "128x4"],
+        help="Activation scale layout for --dynamic_quant.",
+    )
+    parser.add_argument(
         "--use_nvfp4",
         action="store_true",
         help="In mm_fp4, whether to use nvfp4 quantization or mxfp4 quantization, defaults to False.",
@@ -213,7 +250,13 @@ def parse_gemm_args(line, parser):
     if args.routine == "mm_fp8":
         if not has_backends_arg:
             args.backends = ["trtllm_low_latency"]
-    if args.verbose >= 1:
+    if args.routine == "mm_mxfp8":
+        _validate_dynamic_quant_backends(
+            args.dynamic_quant,
+            args.dynamic_quant_layout,
+            args.backends,
+        )
+    if getattr(args, "verbose", 0) >= 1:
         print(f"[INFO] {args = }")
     return args
 
@@ -1837,6 +1880,8 @@ def testMmMxfp8(args):
 
     ## Parse input arguments
     backends = args.backends
+    dynamic_quant = getattr(args, "dynamic_quant", False)
+    dynamic_quant_layout = getattr(args, "dynamic_quant_layout", "auto")
     m = args.m
     n = args.n
     k = args.k
@@ -1851,6 +1896,12 @@ def testMmMxfp8(args):
         "auto",
     ]
     res = []
+
+    _validate_dynamic_quant_backends(
+        dynamic_quant,
+        dynamic_quant_layout,
+        backends,
+    )
 
     backends = filter_backends_by_compute_capability(backends, args.routine, device)
     if len(backends) == 0:
@@ -1878,18 +1929,19 @@ def testMmMxfp8(args):
         return res
 
     inputs = {}
-    input = torch.randn([m, k], device=device, dtype=torch.bfloat16)
+    input_bf16 = torch.randn([m, k], device=device, dtype=torch.bfloat16)
     mat2 = torch.randn([n, k], device=device, dtype=torch.bfloat16)
     for backend in backends:
-        ## Prepare input tensors
-        # Every backend consumes swizzled scales; trtllm optionally uses 8x4 for A.
-        if backend == "trtllm" and not args.use_128x4_sf_layout:
-            sf_layout_input = flashinfer.SfLayout.layout_8x4
-        else:
-            sf_layout_input = flashinfer.SfLayout.layout_128x4
-        input_mxfp8, input_scale = mxfp8_quantize(
-            input, sf_swizzle_layout=sf_layout_input
-        )
+        if not dynamic_quant:
+            # Every backend consumes swizzled scales; trtllm optionally uses 8x4 for A.
+            if backend == "trtllm" and not args.use_128x4_sf_layout:
+                sf_layout_input = flashinfer.SfLayout.layout_8x4
+            else:
+                sf_layout_input = flashinfer.SfLayout.layout_128x4
+            input_mxfp8, input_scale = mxfp8_quantize(
+                input_bf16, sf_swizzle_layout=sf_layout_input
+            )
+
         # when using trtllm, the shuffle_matrix_sf_a will swizzle the layout.
         mat2_mxfp8, mat2_scale = mxfp8_quantize(
             mat2,
@@ -1907,6 +1959,18 @@ def testMmMxfp8(args):
             )
             mat2_scale = mat2_scale.t()
 
+        if dynamic_quant:
+            out = torch.empty((m, n), device=device, dtype=res_dtype)
+            if args.verbose >= 2:
+                print(f"[VERBOSE] {backend}: {input_bf16.shape = }")
+                print(f"[VERBOSE] {backend}: {input_bf16.dtype = }")
+                print(f"[VERBOSE] {backend}: {mat2_mxfp8.shape = }")
+                print(f"[VERBOSE] {backend}: {mat2_mxfp8.dtype = }")
+                print(f"[VERBOSE] {backend}: {mat2_scale.shape = }")
+                print(f"[VERBOSE] {backend}: {mat2_scale.dtype = }")
+            inputs[backend] = (mat2_mxfp8, mat2_scale, out)
+            continue
+
         if args.verbose >= 2:
             print(f"[VERBOSE] {backend}: {input_mxfp8.shape = }")
             print(f"[VERBOSE] {backend}: {input_mxfp8.dtype = }")
@@ -1920,11 +1984,43 @@ def testMmMxfp8(args):
 
     def run_backend(
         backend: str,
-        inputs: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+        inputs: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
         assert backend in ["cutlass", "trtllm", "cute-dsl", "cudnn", "auto"], (
             f"Unsupported backend: {backend}"
         )
+        if dynamic_quant:
+            mat2_mxfp8, mat2_scale, out = inputs
+            if dynamic_quant_layout == "auto":
+                return flashinfer.gemm.mm_mxfp8_dynamic_quant(
+                    a=input_bf16,
+                    b=mat2_mxfp8.t(),
+                    b_descale=mat2_scale,
+                    out=out,
+                    out_dtype=res_dtype,
+                    backend="trtllm",
+                )
+
+            sf_layout = (
+                flashinfer.SfLayout.layout_8x4
+                if dynamic_quant_layout == "8x4"
+                else flashinfer.SfLayout.layout_128x4
+            )
+            input_mxfp8, input_scale = mxfp8_quantize(
+                input_bf16,
+                sf_swizzle_layout=sf_layout,
+            )
+            return flashinfer.gemm.mm_mxfp8(
+                a=input_mxfp8,
+                b=mat2_mxfp8.t(),
+                a_descale=input_scale,
+                b_descale=mat2_scale,
+                out=out,
+                out_dtype=res_dtype,
+                backend=backend,
+                use_8x4_sf_layout=dynamic_quant_layout == "8x4",
+            )
+
         input_mxfp8, mat2_mxfp8, input_scale, mat2_scale = inputs
         return flashinfer.gemm.mm_mxfp8(
             a=input_mxfp8,
@@ -1938,7 +2034,7 @@ def testMmMxfp8(args):
 
     has_reference_output = False
     if run_refcheck:
-        reference_output = torch.mm(input, mat2.t())
+        reference_output = torch.mm(input_bf16, mat2.t())
         has_reference_output = True
 
     cache_path = getattr(args, "autotune_cache", None)
