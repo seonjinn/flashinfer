@@ -597,3 +597,24 @@ def test_trtllm_raises_for_linear_b_descale():
             a_descale,
             b_descale,
         )
+
+
+@pytest.mark.parametrize(
+    ("num_tokens", "expected"),
+    [(0, 1), (1, 1), (3, 3), (4, 4), (31, 31), (32, 32), (33, 64), (257, 512)],
+)
+def test_trtllm_mxfp8_low_m_tuning_bucket(num_tokens: int, expected: int) -> None:
+    assert gemm_base._map_to_trtllm_mxfp8_tuning_bucket(num_tokens) == expected
+
+
+def test_trtllm_mxfp8_tuning_buckets_keep_low_m_exact() -> None:
+    buckets = gemm_base._get_trtllm_mxfp8_tuning_buckets(64)
+    assert buckets[:32] == tuple(range(1, 33))
+    assert buckets[32:] == (64,)
+
+
+def test_trtllm_mxfp8_tuning_config_uses_exact_low_m_mapping() -> None:
+    spec = gemm_base._MM_MXFP8_TRTLLM_TUNING_CONFIG.dynamic_tensor_specs[0]
+    assert spec.gen_tuning_buckets(64) == tuple(range(1, 33)) + (64,)
+    assert spec.map_to_tuning_buckets(3) == 3
+    assert spec.map_to_tuning_buckets(33) == 64
