@@ -630,6 +630,7 @@ def test_mm_mxfp8_trtllm_low_m(
     m: int,
     use_8x4_sf_layout_for_a: bool,
     auto_tuning: bool,
+    reset_autotuner: None,
 ) -> None:
     _run_mm_mxfp8(
         m,
@@ -654,8 +655,10 @@ def reset_autotuner() -> Generator[None, None, None]:
 
 
 def test_mm_mxfp8_trtllm_exact_m_cache_round_trip(
-    tmp_path, reset_autotuner: None
+    tmp_path, monkeypatch: pytest.MonkeyPatch, reset_autotuner: None
 ) -> None:
+    _skip_if_unsupported("trtllm")
+
     cache_path = tmp_path / "trtllm_mxfp8.json"
     input_bf16 = torch.randn((3, 4096), device="cuda", dtype=torch.bfloat16)
     weight_bf16 = torch.randn((2688, 4096), device="cuda", dtype=torch.bfloat16)
@@ -678,6 +681,34 @@ def test_mm_mxfp8_trtllm_exact_m_cache_round_trip(
         )
 
     AutoTuner._instance = None
+    cache_lookups = []
+    original_search_cache = AutoTuner.search_cache
+
+    def search_cache_spy(
+        self,
+        custom_op,
+        runners,
+        input_shapes,
+        tuning_config,
+        inputs=None,
+    ):
+        result = original_search_cache(
+            self, custom_op, runners, input_shapes, tuning_config, inputs
+        )
+        if custom_op == "mxfp8_gemm":
+            is_cache_hit, runner_id, _, _ = result
+            runner = runners[runner_id]
+            matched_profile = AutoTuner._get_cache_key(
+                custom_op,
+                runner,
+                input_shapes,
+                tuning_config,
+                runner.get_cache_key_extras(inputs) if inputs is not None else (),
+            ).nearest_profile
+            cache_lookups.append((is_cache_hit, matched_profile))
+        return result
+
+    monkeypatch.setattr(AutoTuner, "search_cache", search_cache_spy)
     with autotune(False, cache=str(cache_path)):
         cached = mm_mxfp8(
             a,
@@ -689,4 +720,8 @@ def test_mm_mxfp8_trtllm_exact_m_cache_round_trip(
         )
 
     assert cache_path.exists()
+    assert len(cache_lookups) == 1
+    is_cache_hit, matched_profile = cache_lookups[0]
+    assert is_cache_hit
+    assert matched_profile[0][0] == 3
     torch.testing.assert_close(cached, tuned, rtol=0, atol=0)
