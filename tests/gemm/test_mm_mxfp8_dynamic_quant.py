@@ -1,6 +1,7 @@
 import json
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
@@ -13,7 +14,13 @@ from flashinfer import (
     shuffle_matrix_a,
     shuffle_matrix_sf_a,
 )
-from flashinfer.autotuner import AutoTuner, OptimizationProfile
+from flashinfer.autotuner import (
+    AutoTuner,
+    OptimizationProfile,
+    StaticDim,
+    TunableRunner,
+    TuningConfig,
+)
 from flashinfer.gemm import gemm_base
 from flashinfer.utils import get_compute_capability
 
@@ -116,10 +123,18 @@ class _RecordingTuner:
         self.extras: list[tuple[bool]] = []
         self.tactics: list[list[int]] = []
 
-    def choose_one(self, custom_op, runners, tuning_config, inputs):
+    def choose_one(
+        self,
+        custom_op: str,
+        runners: list[TunableRunner],
+        tuning_config: TuningConfig,
+        inputs: list[torch.Tensor],
+    ) -> tuple[TunableRunner, Any]:
         profile = OptimizationProfile(
             shapes=[
-                list(value.shape) if isinstance(value, torch.Tensor) else []
+                [StaticDim(dim) for dim in value.shape]
+                if isinstance(value, torch.Tensor)
+                else []
                 for value in inputs
             ],
             tensor_initializers=[None] * len(inputs),
@@ -129,20 +144,30 @@ class _RecordingTuner:
         return runners[0], -1
 
 
+@pytest.mark.parametrize(
+    "m, expected_extras, selected_layout",
+    [
+        (4, [(True,), (False,)], SfLayout.layout_8x4),
+        (33, [(False,), (True,)], SfLayout.layout_128x4),
+    ],
+)
 def test_mm_mxfp8_dynamic_quant_offers_both_layouts(
+    m: int,
+    expected_extras: list[tuple[bool]],
+    selected_layout: SfLayout,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder = _RecordingTuner()
     monkeypatch.setattr(AutoTuner, "get", classmethod(lambda cls: recorder))
 
-    a = torch.randn((4, 4096), device="cuda", dtype=torch.bfloat16)
+    a = torch.randn((m, 4096), device="cuda", dtype=torch.bfloat16)
     _, b, b_sf = _prepare_trtllm_weight(2688, 4096)
     quantized_layouts: list[SfLayout] = []
     real_quantize = gemm_base.mxfp8_quantize
 
     def recording_quantize(
         input: torch.Tensor,
-        **kwargs,
+        **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         quantized_layouts.append(kwargs["sf_swizzle_layout"])
         return real_quantize(input, **kwargs)
@@ -151,9 +176,9 @@ def test_mm_mxfp8_dynamic_quant_offers_both_layouts(
 
     mm_mxfp8_dynamic_quant(a, b, b_sf)
 
-    assert recorder.extras == [(True,), (False,)]
+    assert recorder.extras == expected_extras
     assert all(recorder.tactics)
-    assert quantized_layouts == [SfLayout.layout_8x4]
+    assert quantized_layouts == [selected_layout]
 
 
 def test_mm_mxfp8_dynamic_quant_cache_round_trip(
@@ -173,13 +198,13 @@ def test_mm_mxfp8_dynamic_quant_cache_round_trip(
     real_search_cache = AutoTuner.search_cache
 
     def recording_search_cache(
-        self,
-        custom_op,
-        runners,
-        input_shapes,
-        tuning_config,
-        inputs=None,
-    ):
+        self: AutoTuner,
+        custom_op: str,
+        runners: list[TunableRunner],
+        input_shapes: tuple[tuple[int, ...], ...],
+        tuning_config: TuningConfig,
+        inputs: list[torch.Tensor] | None = None,
+    ) -> tuple[bool, int, Any, OptimizationProfile | None]:
         result = real_search_cache(
             self,
             custom_op,
