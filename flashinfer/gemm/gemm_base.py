@@ -5298,11 +5298,12 @@ def mm_mxfp8(
 
     tuner = AutoTuner.get()
 
-    tuning_config = (
-        _MM_MXFP8_CUTE_DSL_TUNING_CONFIG
-        if backends == ["cute-dsl"]
-        else _MM_MXFP8_TUNING_CONFIG
-    )
+    if backends == ["cute-dsl"]:
+        tuning_config = _MM_MXFP8_CUTE_DSL_TUNING_CONFIG
+    elif backends == ["trtllm"]:
+        tuning_config = _MM_MXFP8_TRTLLM_TUNING_CONFIG
+    else:
+        tuning_config = _MM_MXFP8_TUNING_CONFIG
 
     inputs = [
         a,
@@ -6508,6 +6509,36 @@ _MM_MXFP8_TUNING_CONFIG = TuningConfig(
             5,  # out_tensor_index
             0,
             lambda shapes: shapes[0][0],
+        ),
+    ),
+)
+
+_TRTLLM_MXFP8_EXACT_M_MAX = 32
+
+
+def _get_trtllm_mxfp8_tuning_buckets(max_num_tokens: int) -> tuple[int, ...]:
+    exact_end = min(max(max_num_tokens, 1), _TRTLLM_MXFP8_EXACT_M_MAX)
+    exact = range(1, exact_end + 1)
+    hybrid = get_hybrid_num_tokens_buckets(max(max_num_tokens, 1))
+    return tuple(sorted(set(exact).union(hybrid)))
+
+
+def _map_to_trtllm_mxfp8_tuning_bucket(num_tokens: int) -> int:
+    if num_tokens <= 0:
+        return 1
+    if num_tokens <= _TRTLLM_MXFP8_EXACT_M_MAX:
+        return num_tokens
+    return map_to_hybrid_bucket_uncapped(num_tokens)
+
+
+_MM_MXFP8_TRTLLM_TUNING_CONFIG = replace(
+    _MM_MXFP8_TUNING_CONFIG,
+    dynamic_tensor_specs=(
+        DynamicTensorSpec(
+            (0,),
+            (0,),
+            _get_trtllm_mxfp8_tuning_buckets,
+            _map_to_trtllm_mxfp8_tuning_bucket,
         ),
     ),
 )
