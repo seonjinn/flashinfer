@@ -84,6 +84,26 @@ def _validate_dynamic_quant_backends(
         )
 
 
+def _dynamic_mxfp8_problem_bytes(
+    m: int,
+    n: int,
+    k: int,
+    out_itemsize: int,
+) -> int:
+    activation_values = m * k * torch.float8_e4m3fn.itemsize
+    activation_scales = m * (k // 32) * torch.uint8.itemsize
+    weight_values = n * k * torch.float8_e4m3fn.itemsize
+    weight_scales = n * (k // 32) * torch.uint8.itemsize
+    # BF16 A read, quantized A value/scale write+read, W value/scale read, and C write.
+    return (
+        m * k * torch.bfloat16.itemsize
+        + 2 * (activation_values + activation_scales)
+        + weight_values
+        + weight_scales
+        + m * n * out_itemsize
+    )
+
+
 def parse_gemm_args(line, parser):
     """
     Parse command line arguments for gemm test configuration.
@@ -1876,6 +1896,10 @@ def testMmMxfp8(args):
     backends = args.backends
     dynamic_quant = getattr(args, "dynamic_quant", False)
     dynamic_quant_layout = getattr(args, "dynamic_quant_layout", "auto")
+    case_tag = args.case_tag
+    if dynamic_quant:
+        dynamic_quant_tag = f"dynamic_quant={dynamic_quant_layout}"
+        case_tag = f"{case_tag};{dynamic_quant_tag}" if case_tag else dynamic_quant_tag
     m = args.m
     n = args.n
     k = args.k
@@ -1962,7 +1986,7 @@ def testMmMxfp8(args):
                 print(f"[VERBOSE] {backend}: {mat2_mxfp8.dtype = }")
                 print(f"[VERBOSE] {backend}: {mat2_scale.shape = }")
                 print(f"[VERBOSE] {backend}: {mat2_scale.dtype = }")
-            inputs[backend] = (mat2_mxfp8, mat2_scale, out)
+            inputs[backend] = (input_bf16, mat2_mxfp8, mat2_scale, out)
             continue
 
         if args.verbose >= 2:
@@ -1984,7 +2008,7 @@ def testMmMxfp8(args):
             f"Unsupported backend: {backend}"
         )
         if dynamic_quant:
-            mat2_mxfp8, mat2_scale, out = inputs
+            input_bf16, mat2_mxfp8, mat2_scale, out = inputs
             if dynamic_quant_layout == "auto":
                 return flashinfer.gemm.mm_mxfp8_dynamic_quant(
                     a=input_bf16,
@@ -2107,13 +2131,20 @@ def testMmMxfp8(args):
             median_time = np.median(backend_times[backend])
             std_time = np.std(backend_times[backend])
             problem_flops = 2 * m * n * k
-            # MXFP8 uses fp8_e4m3fn for data (1 byte) and uint8 for scales
-            # Scale tensors are much smaller, so approximate as 1 byte per element for simplicity
-            problem_bytes = (
-                m * k * torch.float8_e4m3fn.itemsize
-                + n * k * torch.float8_e4m3fn.itemsize
-                + m * n * res_dtype.itemsize
-            )
+            if dynamic_quant:
+                problem_bytes = _dynamic_mxfp8_problem_bytes(
+                    m,
+                    n,
+                    k,
+                    out_itemsize=res_dtype.itemsize,
+                )
+            else:
+                # MXFP8 uses fp8_e4m3fn for data (1 byte) and uint8 for scales.
+                problem_bytes = (
+                    m * k * torch.float8_e4m3fn.itemsize
+                    + n * k * torch.float8_e4m3fn.itemsize
+                    + m * n * res_dtype.itemsize
+                )
             tflops = problem_flops / (10**9 * median_time)  # in TFLOPs/sec
             tb_per_sec = problem_bytes / (10**9 * median_time)  # in TB/sec
             print_perf_metrics(backend_name, median_time, std_time, tflops, tb_per_sec)
@@ -2130,7 +2161,7 @@ def testMmMxfp8(args):
                 cur_res["k"] = k
                 cur_res["out_dtype"] = res_dtype
                 cur_res["backend"] = backend_name
-                cur_res["case_tag"] = args.case_tag
+                cur_res["case_tag"] = case_tag
                 res.append(cur_res)
     return res
 

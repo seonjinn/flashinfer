@@ -8,10 +8,22 @@ import pytest
 BENCHMARK_ROOT = Path(__file__).resolve().parents[2] / "benchmarks"
 sys.path.insert(0, str(BENCHMARK_ROOT))
 
-from routines.gemm import parse_gemm_args  # noqa: E402
+from routines.gemm import _dynamic_mxfp8_problem_bytes, parse_gemm_args  # noqa: E402
 
 
-def test_mm_mxfp8_accepts_dynamic_quant_flag() -> None:
+@pytest.mark.parametrize(
+    ("dynamic_quant_layout", "backend"),
+    [
+        ("auto", "trtllm"),
+        ("8x4", "trtllm"),
+        ("128x4", "trtllm"),
+        ("128x4", "cute-dsl"),
+    ],
+)
+def test_mm_mxfp8_accepts_supported_dynamic_quant_layout_backend_pair(
+    dynamic_quant_layout: str,
+    backend: str,
+) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--routine")
     args = parse_gemm_args(
@@ -25,15 +37,16 @@ def test_mm_mxfp8_accepts_dynamic_quant_flag() -> None:
             "--k",
             "4096",
             "--backends",
-            "trtllm",
+            backend,
             "--dynamic_quant",
             "--dynamic_quant_layout",
-            "auto",
+            dynamic_quant_layout,
         ],
         parser,
     )
     assert args.dynamic_quant is True
-    assert args.dynamic_quant_layout == "auto"
+    assert args.dynamic_quant_layout == dynamic_quant_layout
+    assert args.backends == [backend]
 
 
 @pytest.mark.parametrize(
@@ -69,3 +82,7 @@ def test_mm_mxfp8_rejects_dynamic_quant_layout_backend_mismatch(
             ],
             parser,
         )
+
+
+def test_dynamic_mxfp8_problem_bytes_includes_quantization_traffic() -> None:
+    assert _dynamic_mxfp8_problem_bytes(4, 128, 256, out_itemsize=2) == 38_976
