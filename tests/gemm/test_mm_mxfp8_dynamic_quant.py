@@ -39,3 +39,21 @@ def test_mm_mxfp8_dynamic_quant_rejects_unsupported_backend() -> None:
     _, b, b_sf = _prepare_trtllm_weight(2688, 4096)
     with pytest.raises(ValueError, match="backend must be 'trtllm'"):
         mm_mxfp8_dynamic_quant(a, b, b_sf, backend="cutlass")
+
+
+def test_mm_mxfp8_dynamic_quant_rejects_n_below_128() -> None:
+    a = torch.empty((4, 256), device="cuda", dtype=torch.bfloat16)
+    b = torch.empty((256, 64), device="cuda", dtype=torch.float8_e4m3fn)
+    b_sf = torch.empty((0,), device="cuda", dtype=torch.uint8)
+
+    with pytest.raises(ValueError, match="N >= 128"):
+        mm_mxfp8_dynamic_quant(a, b, b_sf)
+
+
+def test_mm_mxfp8_dynamic_quant_rejects_zero_k() -> None:
+    a = torch.empty((4, 0), device="cuda", dtype=torch.bfloat16)
+    b = torch.empty((0, 128), device="cuda", dtype=torch.float8_e4m3fn)
+    b_sf = torch.empty((0,), device="cuda", dtype=torch.uint8)
+
+    with pytest.raises(ValueError, match="K must be positive"):
+        mm_mxfp8_dynamic_quant(a, b, b_sf)

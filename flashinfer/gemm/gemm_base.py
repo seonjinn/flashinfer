@@ -5405,6 +5405,10 @@ def mm_mxfp8_dynamic_quant(
         )
     if a.ndim != 2 or b.ndim != 2 or a.shape[1] != b.shape[0]:
         raise ValueError(f"expected a[M, K] and b[K, N], got {a.shape=} and {b.shape=}")
+    if b.shape[1] < 128:
+        raise ValueError(f"TRTLLM MXFP8 requires N >= 128, got {b.shape[1]}")
+    if a.shape[1] <= 0:
+        raise ValueError(f"TRTLLM MXFP8 K must be positive, got {a.shape[1]}")
     if b.dtype != torch.float8_e4m3fn or b_descale.dtype != torch.uint8:
         raise ValueError("b and b_descale must use TRTLLM MXFP8 weight storage")
     if out_dtype != torch.bfloat16:
