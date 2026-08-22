@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--refinement-rounds", type=int, default=3)
     parser.add_argument("--evaluation-rounds", type=int, default=5)
     parser.add_argument("--limit", type=int)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
     return parser.parse_args()
 
 
@@ -187,6 +189,8 @@ def measure_interleaved(
 
 def main() -> None:
     args = parse_args()
+    if not 0 <= args.shard_index < args.num_shards:
+        raise ValueError("shard-index must be in [0, num-shards)")
     shapes = load_shapes(args.shape_summary, args.threshold_pct)
     if args.limit is not None:
         shapes = sorted(
@@ -194,6 +198,7 @@ def main() -> None:
             key=lambda row: float(row["online_graph_regret_pct"]),
             reverse=True,
         )[: args.limit]
+    shapes = shapes[args.shard_index :: args.num_shards]
     args.output.parent.mkdir(parents=True, exist_ok=True)
 
     exact_shape_config = dataclasses.replace(
@@ -216,7 +221,12 @@ def main() -> None:
             random.Random(args.base_seed + repetition).shuffle(ordered_shapes)
             for shape_index, shape in enumerate(ordered_shapes):
                 m, n, k = (int(shape[key]) for key in ("m", "n", "k"))
-                seed = args.base_seed + repetition * 10_000 + shape_index
+                seed = (
+                    args.base_seed
+                    + args.shard_index * 1_000_000
+                    + repetition * 10_000
+                    + shape_index
+                )
                 runner, inputs = prepare_problem(m, n, k, seed)
                 randomize_candidate_order(runner, seed)
                 tuner = AutoTuner.get()
@@ -233,7 +243,7 @@ def main() -> None:
                         runner,
                         inputs,
                         exact_shape_config,
-                        f"mxfp8_policy_{name}_r{repetition}_{m}_{n}_{k}",
+                        f"mxfp8_policy_s{args.shard_index}_{name}_r{repetition}_{m}_{n}_{k}",
                         policies[name],
                     )
                     selections[name] = tactic
