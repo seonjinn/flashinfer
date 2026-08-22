@@ -413,12 +413,25 @@ class DynamicTensorSpec:
             For every tensor mapped to the input_idx, their dimension mapped to the dim_idx must be the same.
         gen_tuning_buckets: A tuple of values to try or a function generating values.
         map_to_tuning_buckets: A function to map dimensions to valid values during inference.
+        tensor_initializers: Optional per-input initializers accepted by the
+            FlashInfer 0.6.16 fused-MoE runtime.
     """
 
     input_idx: tuple[int, ...]
     dim_idx: tuple[int, ...]
     gen_tuning_buckets: tuple[int, ...] | Callable[[int], Iterable[int]]
     map_to_tuning_buckets: Callable[[int], int]
+    tensor_initializers: Sequence[TensorInitializer | None] | None = None
+
+    def __post_init__(self):
+        if self.tensor_initializers is None:
+            self.tensor_initializers = (None,) * len(self.input_idx)
+        else:
+            self.tensor_initializers = tuple(self.tensor_initializers)
+        if len(self.tensor_initializers) != len(self.input_idx):
+            raise ValueError(
+                "tensor_initializers must match the number of input indices"
+            )
 
 
 @dataclass(slots=True, unsafe_hash=True)
@@ -3007,6 +3020,14 @@ class AutoTuner:
             [None] * len(inputs),
         )
 
+        for spec in tuning_config.dynamic_tensor_specs:
+            for idx, initializer in zip(
+                spec.input_idx, spec.tensor_initializers, strict=True
+            ):
+                if initializer is not None:
+                    base_profile.tensor_initializers[idx] = initializer
+
+        # The newer top-level API takes precedence when both forms are present.
         for idx, initializer in tuning_config.tensor_initializers:
             base_profile.tensor_initializers[idx] = initializer
 

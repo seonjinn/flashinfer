@@ -609,6 +609,40 @@ def test_tuning_config_tensor_initializers_apply_by_input_index():
     assert torch.all(prepared[2] == 7)
 
 
+def test_dynamic_tensor_spec_legacy_initializers_apply_by_input_index():
+    """Accept the per-spec initializer API used by FlashInfer 0.6.16 MoE."""
+
+    def fill_sevens(shapes, dtype, device):
+        return torch.full(shapes, 7, dtype=dtype, device=device)
+
+    tuner = reset_autotuner()
+    config = TuningConfig(
+        dynamic_tensor_specs=(
+            DynamicTensorSpec(
+                (0, 2),
+                (0, 0),
+                (8,),
+                lambda _: 8,
+                (None, fill_sevens),
+            ),
+        ),
+    )
+    inputs = [
+        torch.empty((4, 2), dtype=torch.float32),
+        torch.empty((3, 3), dtype=torch.float32),
+        torch.empty((4, 1), dtype=torch.float32),
+    ]
+
+    (profile,) = tuner._generate_optimization_profiles(config, inputs)
+    assert profile.tensor_initializers == [None, None, fill_sevens]
+
+    prepared = tuner._prepare_input_tensors(profile, inputs)
+    assert tuple(prepared[0].shape) == (8, 2)
+    assert prepared[1] is inputs[1]
+    assert tuple(prepared[2].shape) == (8, 1)
+    assert torch.all(prepared[2] == 7)
+
+
 class TileTacticDummyRunner(TunableRunner):
     def __init__(self, supported_tiles: tuple[int, ...], num_tactics_per_tile: int = 2):
         self.supported_tiles = supported_tiles
