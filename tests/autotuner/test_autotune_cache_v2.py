@@ -415,6 +415,76 @@ def test_measure_policy_overrides_profiling_config(cache_root, monkeypatch):
     assert seen3 and all(c is _CONFIG for c in seen3)
 
 
+def test_measure_policy_refinement_corrects_noisy_first_pass(cache_root, monkeypatch):
+    """Top-k median refinement replaces a noisy one-pass winner."""
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    calls = []
+    measurements = {
+        -1: [5.0, 5.0, 5.0, 5.0],
+        0: [0.5, 1.5, 1.5, 1.5],
+        1: [1.0, 1.0, 1.0, 1.0],
+        2: [2.0, 2.0, 2.0, 2.0],
+    }
+
+    def fake_profile(self, runner, inputs, tactic, tuning_config, **kwargs):
+        index = sum(previous == tactic for previous in calls)
+        calls.append(tactic)
+        return measurements[tactic][index]
+
+    monkeypatch.setattr(AutoTuner, "_profile_single_kernel", fake_profile)
+    policy = MeasurementPolicy(refinement_top_k=3, refinement_rounds=3)
+    with autotune_v2(persistent_cache=False, measurement_policy=policy):
+        _, tactic = AutoTuner.get().choose_one(
+            _OP, [DummyRunner()], _CONFIG, [torch.zeros(8, 16)]
+        )
+
+    assert tactic == 1
+    assert calls == [
+        -1,
+        0,
+        1,
+        2,
+        0,
+        1,
+        2,
+        1,
+        2,
+        0,
+        2,
+        0,
+        1,
+    ]
+
+
+def test_measure_policy_default_does_not_refine(cache_root, monkeypatch):
+    """The default policy preserves the legacy single-pass behavior."""
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    calls = _install_fake_profile(monkeypatch, times={-1: 5.0, 0: 0.5, 1: 1.0, 2: 2.0})
+
+    with autotune_v2(persistent_cache=False, measurement_policy=MeasurementPolicy()):
+        _, tactic = AutoTuner.get().choose_one(
+            _OP, [DummyRunner()], _CONFIG, [torch.zeros(8, 16)]
+        )
+
+    assert tactic == 0
+    assert calls == [-1, 0, 1, 2]
+
+
+def test_measure_policy_refinement_validation_and_identity(cache_root):
+    with pytest.raises(ValueError, match="refinement_top_k"):
+        MeasurementPolicy(refinement_top_k=0)
+    with pytest.raises(ValueError, match="refinement_rounds"):
+        MeasurementPolicy(refinement_rounds=0)
+    with pytest.raises(ValueError, match="both disabled or both greater than one"):
+        MeasurementPolicy(refinement_top_k=3, refinement_rounds=1)
+
+    policy = MeasurementPolicy(refinement_top_k=3, refinement_rounds=3)
+    assert policy.manifest_fields() == {
+        "measure_refinement_rounds": "3",
+        "measure_refinement_top_k": "3",
+    }
+
+
 def test_measure_policy_isolates_store_identity(cache_root, monkeypatch):
     """Entries tuned under different measurement policies live in different
     environment directories and never overwrite each other."""

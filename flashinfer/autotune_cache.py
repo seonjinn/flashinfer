@@ -85,10 +85,16 @@ class MeasurementPolicy:
         cold_l2: Force cold-/hot-L2 profiling; ``None`` (default)
             inherits each op's ``TuningConfig.use_cold_l2_cache``.
             Orthogonal to ``execution_mode``.
+        refinement_top_k: Number of first-pass candidates to remeasure.
+            ``1`` (default) disables refinement.
+        refinement_rounds: Number of interleaved measurements for each
+            shortlisted candidate. ``1`` (default) disables refinement.
     """
 
     execution_mode: str = "auto"
     cold_l2: Optional[bool] = None
+    refinement_top_k: int = 1
+    refinement_rounds: int = 1
     # Internal/diagnostic override pinning the timing implementation
     # ("events" | "events_no_delay" | "cupti"); "auto" derives it from
     # execution_mode.  Used by the accuracy harness to A/B
@@ -112,6 +118,15 @@ class MeasurementPolicy:
                 "MeasurementPolicy(execution_mode='eager') rejects "
                 "_timer='cupti': CUPTI spans exclude per-call host cost, "
                 "which eager serving pays"
+            )
+        if self.refinement_top_k < 1:
+            raise ValueError("MeasurementPolicy.refinement_top_k must be >= 1")
+        if self.refinement_rounds < 1:
+            raise ValueError("MeasurementPolicy.refinement_rounds must be >= 1")
+        if (self.refinement_top_k == 1) != (self.refinement_rounds == 1):
+            raise ValueError(
+                "refinement_top_k and refinement_rounds must be both disabled "
+                "or both greater than one"
             )
 
     @property
@@ -144,6 +159,9 @@ class MeasurementPolicy:
             fields["measure_cold_l2"] = str(self.cold_l2)
         if self._timer != "auto":
             fields["measure_timer"] = self._timer
+        if self.refinement_top_k > 1:
+            fields["measure_refinement_top_k"] = str(self.refinement_top_k)
+            fields["measure_refinement_rounds"] = str(self.refinement_rounds)
         return fields
 
 

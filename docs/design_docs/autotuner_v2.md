@@ -144,7 +144,12 @@ maintaining a migration path for data that is, by construction, an optimization.
 ### 2.5 MeasurementPolicy — tune the way you deploy
 
 ```python
-MeasurementPolicy(execution_mode="auto" | "cuda_graph" | "eager", cold_l2=None)
+MeasurementPolicy(
+    execution_mode="auto" | "cuda_graph" | "eager",
+    cold_l2=None,
+    refinement_top_k=1,
+    refinement_rounds=1,
+)
 ```
 
 The primary axis is **whether per-call host cost counts**, not the timer implementation. Under
@@ -163,6 +168,15 @@ what closes the eager-warmup / graph-serving aliasing.
 
 `"auto"` currently preserves legacy behavior. Flipping the default to `"cuda_graph"` (the
 dominant serving mode) is gated on validating capture-safety across the op suite.
+
+Top-k refinement is also opt-in. The default `(1, 1)` preserves one measurement per candidate.
+When both values are greater than one, the tuner takes the first-pass top `k`, remeasures them in
+rotating order for the requested rounds, and caches the candidate with the lowest median. The
+values are part of the store identity because they can select a different winner. On 624
+model-derived MXFP8 GEMM shapes on GB200, top-3 by three rounds reduced the one-pass tail from a
+7.21% maximum shape-median regret to 3.44% with no shape above 5%; its median incremental tuning
+cost was 18.81%. This policy is intended for short, noisy kernels, not as an unconditional
+default for every deployment.
 
 ### 2.6 Runner contract
 
@@ -317,9 +331,9 @@ single ambient policy matching the mode-sensitive path is sufficient.
 - **cuDNN plan sidecar** (after #3707): serialize the winning plan next to the entry to skip
   plan-list enumeration on load.
 - **Per-runner `validate_tactic` adoption** — the hook exists; runners opt in separately.
-- **Policy-level aggregation knob** (rounds + reducer, interleaved min-of-medians): sub-0.05 ms
-  kernels go bimodal under co-tenancy and single-shot medians flip winners run to run, so stable
-  ordering on noisy hosts should be a production-tuning property, not just an offline-harness one.
+- **Adaptive refinement policy:** top-k median refinement is implemented as an explicit policy.
+  Selecting it automatically only for noisy or sub-0.05 ms kernels still needs cross-architecture
+  evidence; the current default remains disabled.
 - **No GC, size limits, or pruning.** Old environment directories accumulate; `rm -rf` is the
   supported cleanup.
 - **Representative probe construction** for MoE (skewed routing / EP-deflated shapes) is a

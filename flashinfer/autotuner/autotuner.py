@@ -2221,6 +2221,7 @@ class AutoTuner:
                                 leave=True,
                             )
                         min_time = float("inf")
+                        scored_candidates: list[tuple[float, int, Any]] = []
                         # Initialize runner and tactic as None in case of no valid tactic or runners are found
                         runner_id, tactic = None, None
                         skipped_count = 0
@@ -2318,6 +2319,24 @@ class AutoTuner:
                                 if time_measured < min_time:
                                     min_time = time_measured
                                     runner_id, tactic = r_id, tac
+                                scored_candidates.append((time_measured, r_id, tac))
+
+                        if (
+                            measure_policy is not None
+                            and measure_policy.refinement_top_k > 1
+                        ):
+                            refined = self._refine_top_candidates(
+                                scored_candidates,
+                                runners,
+                                tensors,
+                                tuning_config,
+                                prepared_input_batches,
+                                top_k=measure_policy.refinement_top_k,
+                                rounds=measure_policy.refinement_rounds,
+                                **kwargs,
+                            )
+                            if refined is not None:
+                                runner_id, tactic = refined
 
                         if skipped_count > 0:
                             logger.info(
@@ -2373,6 +2392,60 @@ class AutoTuner:
             )
 
             return runners[runner_id], tactic
+
+    def _refine_top_candidates(
+        self,
+        scored_candidates: list[tuple[float, int, Any]],
+        runners: list[TunableRunner],
+        inputs: list[torch.Tensor],
+        tuning_config: TuningConfig,
+        input_tensor_batches: list[list[Any]],
+        *,
+        top_k: int,
+        rounds: int,
+        **kwargs,
+    ) -> tuple[int, Any] | None:
+        """Remeasure the first-pass top candidates and return the median winner."""
+        finite = [
+            candidate for candidate in scored_candidates if candidate[0] < float("inf")
+        ]
+        finite.sort(key=lambda candidate: candidate[0])
+        shortlist = finite[:top_k]
+        if len(shortlist) < 2:
+            return None
+
+        measurements: list[list[float]] = [[] for _ in shortlist]
+        for round_index in range(rounds):
+            for candidate_index in range(len(shortlist)):
+                index = (candidate_index + round_index) % len(shortlist)
+                _, runner_id, tactic = shortlist[index]
+                try:
+                    elapsed = self._profile_single_kernel(
+                        runners[runner_id],
+                        inputs,
+                        tactic,
+                        tuning_config,
+                        input_tensor_batches=input_tensor_batches,
+                        **kwargs,
+                    )
+                except Exception as error:
+                    logger.debug(
+                        f"[AutoTuner]: refinement skipped tactic "
+                        f"{runners[runner_id]} {tactic}: {error}"
+                    )
+                    with contextlib.suppress(Exception):
+                        torch.cuda.empty_cache()
+                    elapsed = float("inf")
+                measurements[index].append(elapsed)
+
+        best_index = min(
+            range(len(shortlist)),
+            key=lambda index: statistics.median(measurements[index]),
+        )
+        if statistics.median(measurements[best_index]) == float("inf"):
+            return None
+        _, runner_id, tactic = shortlist[best_index]
+        return runner_id, tactic
 
     def rank_tactics(
         self,
