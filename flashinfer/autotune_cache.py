@@ -119,6 +119,10 @@ class MeasurementPolicy:
                 "_timer='cupti': CUPTI spans exclude per-call host cost, "
                 "which eager serving pays"
             )
+        if type(self.refinement_top_k) is not int:
+            raise TypeError("MeasurementPolicy.refinement_top_k must be an int")
+        if type(self.refinement_rounds) is not int:
+            raise TypeError("MeasurementPolicy.refinement_rounds must be an int")
         if self.refinement_top_k < 1:
             raise ValueError("MeasurementPolicy.refinement_top_k must be >= 1")
         if self.refinement_rounds < 1:

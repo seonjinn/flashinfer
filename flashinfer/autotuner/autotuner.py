@@ -7,6 +7,7 @@ import importlib
 import inspect
 import itertools
 import json
+import math
 import os
 import statistics
 import tempfile
@@ -2326,9 +2327,11 @@ class AutoTuner:
                             and measure_policy.refinement_top_k > 1
                         ):
                             refined = self._refine_top_candidates(
+                                custom_op,
                                 scored_candidates,
                                 runners,
                                 tensors,
+                                p,
                                 tuning_config,
                                 prepared_input_batches,
                                 top_k=measure_policy.refinement_top_k,
@@ -2395,9 +2398,11 @@ class AutoTuner:
 
     def _refine_top_candidates(
         self,
+        custom_op: str,
         scored_candidates: list[tuple[float, int, Any]],
         runners: list[TunableRunner],
         inputs: list[torch.Tensor],
+        profile: OptimizationProfile,
         tuning_config: TuningConfig,
         input_tensor_batches: list[list[Any]],
         *,
@@ -2415,6 +2420,8 @@ class AutoTuner:
             return None
 
         measurements: list[list[float]] = [[] for _ in shortlist]
+        failed = [False for _ in shortlist]
+        pending_base_exception: BaseException | None = None
         for round_index in range(rounds):
             for candidate_index in range(len(shortlist)):
                 index = (candidate_index + round_index) % len(shortlist)
@@ -2428,24 +2435,73 @@ class AutoTuner:
                         input_tensor_batches=input_tensor_batches,
                         **kwargs,
                     )
-                except Exception as error:
+                except BaseException as error:  # noqa: BLE001
                     logger.debug(
                         f"[AutoTuner]: refinement skipped tactic "
                         f"{runners[runner_id]} {tactic}: {error}"
                     )
-                    with contextlib.suppress(Exception):
-                        torch.cuda.empty_cache()
                     elapsed = float("inf")
+                    if not isinstance(error, Exception):
+                        pending_base_exception = pending_base_exception or error
+                if not math.isfinite(elapsed):
+                    failed[index] = True
+                    self._record_failed_profile(
+                        custom_op,
+                        runners[runner_id],
+                        tactic,
+                        inputs,
+                        profile,
+                        tuning_config,
+                    )
                 measurements[index].append(elapsed)
+
+        if pending_base_exception is not None:
+            raise pending_base_exception
 
         best_index = min(
             range(len(shortlist)),
-            key=lambda index: statistics.median(measurements[index]),
+            key=lambda index: (
+                float("inf")
+                if failed[index]
+                else statistics.median(measurements[index])
+            ),
         )
-        if statistics.median(measurements[best_index]) == float("inf"):
+        if failed[best_index] or statistics.median(measurements[best_index]) == float(
+            "inf"
+        ):
             return None
         _, runner_id, tactic = shortlist[best_index]
         return runner_id, tactic
+
+    def _record_failed_profile(
+        self,
+        custom_op: str,
+        runner: TunableRunner,
+        tactic: Any,
+        inputs: list[torch.Tensor],
+        profile: OptimizationProfile,
+        tuning_config: TuningConfig,
+    ) -> None:
+        """Clear CUDA errors and record one failed tactic/profile pair."""
+        with contextlib.suppress(Exception):
+            torch.cuda.synchronize()
+        with contextlib.suppress(Exception):
+            torch.cuda.cudart().cudaGetLastError()
+        with contextlib.suppress(Exception):
+            torch.cuda.empty_cache()
+
+        self.stats.failed_tactics.setdefault(
+            f"{custom_op}::{runner.__class__.__name__}", set()
+        ).add(_tactic_to_json_hashable(tactic))
+        self.stats.failed_profiling_count.setdefault(custom_op, set()).add(
+            AutoTuner._get_cache_key(
+                custom_op,
+                runner,
+                profile.get_opt_shapes(),
+                tuning_config,
+                runner.get_cache_key_extras(inputs),
+            )
+        )
 
     def rank_tactics(
         self,
