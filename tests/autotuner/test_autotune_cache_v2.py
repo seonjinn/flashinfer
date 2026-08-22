@@ -471,6 +471,12 @@ def test_measure_policy_default_does_not_refine(cache_root, monkeypatch):
 
 
 def test_measure_policy_refinement_validation_and_identity(cache_root):
+    for field in ("refinement_top_k", "refinement_rounds"):
+        with pytest.raises(TypeError, match=field):
+            MeasurementPolicy(**{field: 2.5})
+        with pytest.raises(TypeError, match=field):
+            MeasurementPolicy(**{field: True})
+
     with pytest.raises(ValueError, match="refinement_top_k"):
         MeasurementPolicy(refinement_top_k=0)
     with pytest.raises(ValueError, match="refinement_rounds"):
@@ -483,6 +489,75 @@ def test_measure_policy_refinement_validation_and_identity(cache_root):
         "measure_refinement_rounds": "3",
         "measure_refinement_top_k": "3",
     }
+
+
+def test_refinement_disqualifies_candidate_after_any_profile_failure(
+    cache_root, monkeypatch
+):
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.cuda, "cudart", lambda: None)
+    calls = []
+    measurements = {
+        -1: [5.0, 5.0, 5.0, 5.0],
+        0: [0.5, RuntimeError("failed refinement"), 0.5, 0.5],
+        1: [1.0, 1.0, 1.0, 1.0],
+        2: [2.0, 2.0, 2.0, 2.0],
+    }
+
+    def fake_profile(self, runner, inputs, tactic, tuning_config, **kwargs):
+        index = sum(previous == tactic for previous in calls)
+        calls.append(tactic)
+        result = measurements[tactic][index]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(AutoTuner, "_profile_single_kernel", fake_profile)
+    policy = MeasurementPolicy(refinement_top_k=3, refinement_rounds=3)
+    with autotune_v2(persistent_cache=False, measurement_policy=policy):
+        _, tactic = AutoTuner.get().choose_one(
+            _OP, [DummyRunner()], _CONFIG, [torch.zeros(8, 16)]
+        )
+
+    assert tactic == 1
+    assert len(calls) == 13
+    assert 0 in AutoTuner.get().stats.failed_tactics[f"{_OP}::DummyRunner"]
+
+
+def test_refinement_drains_measurements_before_reraising_base_exception(
+    cache_root, monkeypatch
+):
+    monkeypatch.setattr(torch.cuda, "is_current_stream_capturing", lambda: False)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+    monkeypatch.setattr(torch.cuda, "cudart", lambda: None)
+    calls = []
+    measurements = {
+        -1: [5.0, 5.0, 5.0, 5.0],
+        0: [0.5, KeyboardInterrupt(), 0.5, 0.5],
+        1: [1.0, 1.0, 1.0, 1.0],
+        2: [2.0, 2.0, 2.0, 2.0],
+    }
+
+    def fake_profile(self, runner, inputs, tactic, tuning_config, **kwargs):
+        index = sum(previous == tactic for previous in calls)
+        calls.append(tactic)
+        result = measurements[tactic][index]
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    monkeypatch.setattr(AutoTuner, "_profile_single_kernel", fake_profile)
+    policy = MeasurementPolicy(refinement_top_k=3, refinement_rounds=3)
+    with (
+        pytest.raises(KeyboardInterrupt),
+        autotune_v2(persistent_cache=False, measurement_policy=policy),
+    ):
+        AutoTuner.get().choose_one(_OP, [DummyRunner()], _CONFIG, [torch.zeros(8, 16)])
+
+    assert len(calls) == 13
 
 
 def test_measure_policy_isolates_store_identity(cache_root, monkeypatch):
