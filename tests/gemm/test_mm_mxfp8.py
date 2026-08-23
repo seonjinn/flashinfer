@@ -10,7 +10,28 @@ from flashinfer import (
     shuffle_matrix_sf_a,
 )
 from flashinfer.fp8_quantization import mxfp8_quantize
+from flashinfer.gemm import gemm_base
 from flashinfer.utils import get_compute_capability
+
+
+@pytest.mark.parametrize(
+    ("backends", "use_cuda_graph", "use_cold_l2_cache"),
+    [
+        (["trtllm"], True, True),
+        (["cutlass"], False, False),
+        (["cute-dsl"], False, False),
+        (["cutlass", "trtllm"], False, False),
+    ],
+)
+def test_mm_mxfp8_tuning_config_matches_backend_execution(
+    backends: list[str],
+    use_cuda_graph: bool,
+    use_cold_l2_cache: bool,
+) -> None:
+    tuning_config = gemm_base._get_mm_mxfp8_tuning_config(backends)
+
+    assert tuning_config.use_cuda_graph is use_cuda_graph
+    assert tuning_config.use_cold_l2_cache is use_cold_l2_cache
 
 
 def _get_min_cosine_sim(

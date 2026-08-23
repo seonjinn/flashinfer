@@ -15,6 +15,7 @@ limitations under the License.
 """
 
 import functools
+from dataclasses import replace
 from enum import Enum
 from types import SimpleNamespace
 from typing import List, Literal, Optional, Tuple
@@ -5009,7 +5010,7 @@ def mm_mxfp8(
 
     tuner = AutoTuner.get()
 
-    tuning_config = _MM_MXFP8_TUNING_CONFIG
+    tuning_config = _get_mm_mxfp8_tuning_config(backends)
 
     inputs = [
         a,
@@ -6140,6 +6141,19 @@ _MM_MXFP8_TUNING_CONFIG = TuningConfig(
         ),
     ),
 )
+
+
+_MM_MXFP8_TRTLLM_TUNING_CONFIG = replace(
+    _MM_MXFP8_TUNING_CONFIG,
+    use_cuda_graph=True,
+    use_cold_l2_cache=True,
+)
+
+
+def _get_mm_mxfp8_tuning_config(backends: list[str]) -> TuningConfig:
+    if backends == ["trtllm"]:
+        return _MM_MXFP8_TRTLLM_TUNING_CONFIG
+    return _MM_MXFP8_TUNING_CONFIG
 
 
 @backend_requirement(
