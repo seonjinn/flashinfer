@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 
-Backend = Literal["cute-dsl", "trtllm"]
+Backend = Literal["cute-dsl", "cutlass", "trtllm"]
 ScaleLayout = Literal["8x4", "128x4"]
 
 
@@ -72,6 +72,8 @@ def group_shapes(shapes: list[Shape]) -> dict[tuple[int, int], tuple[int, ...]]:
 def _validate_backend_layout(backend: Backend, scale_layout: ScaleLayout) -> None:
     if backend == "cute-dsl" and scale_layout != "128x4":
         raise ValueError("CuTeDSL requires 128x4 activation scales")
+    if backend == "cutlass" and scale_layout != "128x4":
+        raise ValueError("CUTLASS requires 128x4 activation scales")
 
 
 def _cache_path(
@@ -436,7 +438,9 @@ def main() -> None:
     parser.add_argument("--shapes", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--backend", choices=("cute-dsl", "trtllm"), default="cute-dsl")
+    parser.add_argument(
+        "--backend", choices=("cute-dsl", "cutlass", "trtllm"), default="cute-dsl"
+    )
     parser.add_argument("--scale-layout", choices=("8x4", "128x4"), default="128x4")
     parser.add_argument("--dry-run-iters", type=int, default=10)
     parser.add_argument("--repeat-iters", type=int, default=30)

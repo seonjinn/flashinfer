@@ -96,6 +96,7 @@ def test_aggregate_rounds_rejects_unstable_tactic_selection():
 
 def test_validate_backend_layout_accepts_supported_pairs():
     _validate_backend_layout("cute-dsl", "128x4")
+    _validate_backend_layout("cutlass", "128x4")
     _validate_backend_layout("trtllm", "8x4")
     _validate_backend_layout("trtllm", "128x4")
 
@@ -105,9 +106,17 @@ def test_validate_backend_layout_rejects_cute_dsl_8x4():
         _validate_backend_layout("cute-dsl", "8x4")
 
 
+def test_validate_backend_layout_rejects_cutlass_8x4():
+    with pytest.raises(ValueError, match="CUTLASS requires 128x4"):
+        _validate_backend_layout("cutlass", "8x4")
+
+
 def test_cache_path_separates_backend_and_layout(tmp_path):
     assert _cache_path(tmp_path, "trtllm", "8x4", "exact") == (
         tmp_path / "trtllm_8x4_exact_cache.json"
+    )
+    assert _cache_path(tmp_path, "cutlass", "128x4", "exact") == (
+        tmp_path / "cutlass_128x4_exact_cache.json"
     )
 
 
