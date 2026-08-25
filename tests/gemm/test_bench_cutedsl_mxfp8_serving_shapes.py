@@ -5,7 +5,9 @@ import pytest
 from benchmarks.bench_cutedsl_mxfp8_serving_shapes import (
     Shape,
     _aggregate_rounds,
+    _cache_path,
     _reuse_mode,
+    _validate_backend_layout,
     group_shapes,
     load_shapes,
 )
@@ -92,14 +94,31 @@ def test_aggregate_rounds_rejects_unstable_tactic_selection():
         _aggregate_rounds(shape, rows)
 
 
+def test_validate_backend_layout_accepts_supported_pairs():
+    _validate_backend_layout("cute-dsl", "128x4")
+    _validate_backend_layout("trtllm", "8x4")
+    _validate_backend_layout("trtllm", "128x4")
+
+
+def test_validate_backend_layout_rejects_cute_dsl_8x4():
+    with pytest.raises(ValueError, match="CuTeDSL requires 128x4"):
+        _validate_backend_layout("cute-dsl", "8x4")
+
+
+def test_cache_path_separates_backend_and_layout(tmp_path):
+    assert _cache_path(tmp_path, "trtllm", "8x4", "exact") == (
+        tmp_path / "trtllm_8x4_exact_cache.json"
+    )
+
+
 def test_reuse_mode_requires_and_selects_native_cache(tmp_path):
     with pytest.raises(FileNotFoundError, match="Missing exact autotuner cache"):
-        _reuse_mode("exact", tmp_path)
+        _reuse_mode("exact", tmp_path, "cute-dsl", "128x4")
 
-    cache_path = tmp_path / "exact_cache.json"
+    cache_path = tmp_path / "cute-dsl_128x4_exact_cache.json"
     cache_path.write_text("{}\n")
 
-    assert _reuse_mode("exact", tmp_path) == {
+    assert _reuse_mode("exact", tmp_path, "cute-dsl", "128x4") == {
         "mode": "exact",
         "cache_path": str(cache_path),
         "cache_source": "reused",

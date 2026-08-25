@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Compare CuTeDSL MXFP8 hybrid buckets with exact serving-shape tuning.
+"""Compare MXFP8 hybrid buckets with exact serving-shape tuning.
 
 The default FlashInfer tuning config maps the dynamic GEMM M dimension to a
 hybrid bucket. This benchmark measures the transfer regret from that bucket's
 winner at the original serving M, then compares it with a winner tuned at the
-exact M. Both paths use the public autotune cache API and CUDA Graph replay.
+exact M. CuTeDSL and fixed-layout TRTLLM use their real scale layouts and weight
+preparation. Both paths use the public autotune cache API and CUDA Graph replay.
 """
 
 from __future__ import annotations
@@ -17,7 +18,11 @@ import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
+
+
+Backend = Literal["cute-dsl", "trtllm"]
+ScaleLayout = Literal["8x4", "128x4"]
 
 
 @dataclass(frozen=True, order=True)
@@ -64,6 +69,17 @@ def group_shapes(shapes: list[Shape]) -> dict[tuple[int, int], tuple[int, ...]]:
     return {key: tuple(sorted(grouped[key])) for key in sorted(grouped)}
 
 
+def _validate_backend_layout(backend: Backend, scale_layout: ScaleLayout) -> None:
+    if backend == "cute-dsl" and scale_layout != "128x4":
+        raise ValueError("CuTeDSL requires 128x4 activation scales")
+
+
+def _cache_path(
+    directory: Path, backend: Backend, scale_layout: ScaleLayout, mode: str
+) -> Path:
+    return directory / f"{backend}_{scale_layout}_{mode}_cache.json"
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_jsonable(item) for item in value]
@@ -98,10 +114,10 @@ def _capture_selection(call: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
     return output, selected["mxfp8_gemm"]
 
 
-def _make_problem(shape: Shape, seed: int):
+def _make_problem(shape: Shape, seed: int, backend: Backend, scale_layout: ScaleLayout):
     import torch
 
-    from flashinfer import SfLayout
+    from flashinfer import SfLayout, shuffle_matrix_a, shuffle_matrix_sf_a
     from flashinfer.fp8_quantization import mxfp8_quantize
 
     generator = torch.Generator(device="cuda")
@@ -118,16 +134,29 @@ def _make_problem(shape: Shape, seed: int):
         dtype=torch.bfloat16,
         generator=generator,
     )
-    a_q, a_scale = mxfp8_quantize(a, sf_swizzle_layout=SfLayout.layout_128x4)
-    weight_q, weight_scale = mxfp8_quantize(
-        weight, sf_swizzle_layout=SfLayout.layout_128x4
+    activation_layout = (
+        SfLayout.layout_8x4 if scale_layout == "8x4" else SfLayout.layout_128x4
     )
+    a_q, a_scale = mxfp8_quantize(a, sf_swizzle_layout=activation_layout)
+    weight_q, weight_scale = mxfp8_quantize(
+        weight,
+        sf_swizzle_layout=(
+            SfLayout.layout_linear if backend == "trtllm" else SfLayout.layout_128x4
+        ),
+    )
+    if backend == "trtllm":
+        weight_q = shuffle_matrix_a(weight_q, 128).reshape(shape.n, shape.k)
+        weight_scale = shuffle_matrix_sf_a(
+            weight_scale.reshape(shape.n, shape.k // 32),
+            128,
+            num_elts_per_sf=32,
+        ).reshape(-1)
     out = torch.empty((shape.m, shape.n), device="cuda", dtype=torch.bfloat16)
     reference = torch.mm(a, weight.T)
     return a_q, weight_q.T, a_scale, weight_scale, out, reference
 
 
-def _make_call(problem):
+def _make_call(problem, backend: Backend, scale_layout: ScaleLayout):
     import torch
 
     from flashinfer import mm_mxfp8
@@ -148,8 +177,8 @@ def _make_call(problem):
             weight_scale,
             out=out,
             out_dtype=torch.bfloat16,
-            backend="cute-dsl",
-            use_8x4_sf_layout=False,
+            backend=backend,
+            use_8x4_sf_layout=scale_layout == "8x4",
         )
 
     return call
@@ -172,6 +201,8 @@ def _tune_group(
     cache_path: Path,
     reset_cache: bool,
     seed: int,
+    backend: Backend,
+    scale_layout: ScaleLayout,
 ) -> float:
     import torch
 
@@ -184,8 +215,8 @@ def _tune_group(
     if reset_cache:
         cache_path.unlink(missing_ok=True)
     max_shape = Shape(max(m_values), n, k)
-    problem = _make_problem(max_shape, seed)
-    call = _make_call(problem)
+    problem = _make_problem(max_shape, seed, backend, scale_layout)
+    call = _make_call(problem, backend, scale_layout)
     buckets = m_values if exact else None
     torch.cuda.synchronize()
     start = time.perf_counter()
@@ -206,6 +237,8 @@ def _benchmark_prepared_shape(
     cache_path: Path,
     dry_run_iters: int,
     repeat_iters: int,
+    backend: Backend,
+    scale_layout: ScaleLayout,
 ) -> dict[str, Any]:
     import numpy as np
     import torch
@@ -215,7 +248,7 @@ def _benchmark_prepared_shape(
     from flashinfer.testing.utils import bench_gpu_time
 
     AutoTuner.get().clear_cache()
-    call = _make_call(problem)
+    call = _make_call(problem, backend, scale_layout)
     with autotune(
         False,
         cache=str(cache_path),
@@ -252,10 +285,12 @@ def _tune_mode(
     groups: dict[tuple[int, int], tuple[int, ...]],
     output_dir: Path,
     seed: int,
+    backend: Backend,
+    scale_layout: ScaleLayout,
 ) -> dict[str, Any]:
     exact = mode == "exact"
     tuning_time_s = 0.0
-    cache_path = output_dir / f"{mode}_cache.json"
+    cache_path = _cache_path(output_dir, backend, scale_layout, mode)
     for group_index, ((n, k), m_values) in enumerate(groups.items()):
         tuning_time_s += _tune_group(
             n=n,
@@ -265,6 +300,8 @@ def _tune_mode(
             cache_path=cache_path,
             reset_cache=group_index == 0,
             seed=seed,
+            backend=backend,
+            scale_layout=scale_layout,
         )
     return {
         "mode": mode,
@@ -275,8 +312,10 @@ def _tune_mode(
     }
 
 
-def _reuse_mode(mode: str, cache_dir: Path) -> dict[str, Any]:
-    cache_path = cache_dir / f"{mode}_cache.json"
+def _reuse_mode(
+    mode: str, cache_dir: Path, backend: Backend, scale_layout: ScaleLayout
+) -> dict[str, Any]:
+    cache_path = _cache_path(cache_dir, backend, scale_layout, mode)
     if not cache_path.is_file():
         raise FileNotFoundError(f"Missing {mode} autotuner cache: {cache_path}")
     return {
@@ -316,6 +355,8 @@ def _benchmark_pairs(
     dry_run_iters: int,
     repeat_iters: int,
     pair_rounds: int,
+    backend: Backend,
+    scale_layout: ScaleLayout,
 ) -> None:
     import torch
 
@@ -330,7 +371,7 @@ def _benchmark_pairs(
     for (n, k), m_values in groups.items():
         for m in m_values:
             shape = Shape(m, n, k)
-            problem = _make_problem(shape, seed)
+            problem = _make_problem(shape, seed, backend, scale_layout)
             rounds_by_mode: dict[str, list[dict[str, Any]]] = {
                 "hybrid": [],
                 "exact": [],
@@ -348,6 +389,8 @@ def _benchmark_pairs(
                             cache_path=cache_by_mode[mode],
                             dry_run_iters=dry_run_iters,
                             repeat_iters=repeat_iters,
+                            backend=backend,
+                            scale_layout=scale_layout,
                         )
                     )
             for mode in ("hybrid", "exact"):
@@ -393,6 +436,8 @@ def main() -> None:
     parser.add_argument("--shapes", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--backend", choices=("cute-dsl", "trtllm"), default="cute-dsl")
+    parser.add_argument("--scale-layout", choices=("8x4", "128x4"), default="128x4")
     parser.add_argument("--dry-run-iters", type=int, default=10)
     parser.add_argument("--repeat-iters", type=int, default=30)
     parser.add_argument("--pair-rounds", type=int, default=3)
@@ -409,6 +454,10 @@ def main() -> None:
         parser.error("--repeat-iters must be positive")
     if args.pair_rounds <= 0:
         parser.error("--pair-rounds must be positive")
+    try:
+        _validate_backend_layout(args.backend, args.scale_layout)
+    except ValueError as error:
+        parser.error(str(error))
 
     import torch
 
@@ -424,16 +473,24 @@ def main() -> None:
             groups=groups,
             output_dir=args.output_dir,
             seed=args.seed,
+            backend=args.backend,
+            scale_layout=args.scale_layout,
         )
         exact = _tune_mode(
             mode="exact",
             groups=groups,
             output_dir=args.output_dir,
             seed=args.seed,
+            backend=args.backend,
+            scale_layout=args.scale_layout,
         )
     else:
-        baseline = _reuse_mode("hybrid", args.reuse_cache_dir)
-        exact = _reuse_mode("exact", args.reuse_cache_dir)
+        baseline = _reuse_mode(
+            "hybrid", args.reuse_cache_dir, args.backend, args.scale_layout
+        )
+        exact = _reuse_mode(
+            "exact", args.reuse_cache_dir, args.backend, args.scale_layout
+        )
     _benchmark_pairs(
         groups=groups,
         baseline=baseline,
@@ -442,11 +499,15 @@ def main() -> None:
         dry_run_iters=args.dry_run_iters,
         repeat_iters=args.repeat_iters,
         pair_rounds=args.pair_rounds,
+        backend=args.backend,
+        scale_layout=args.scale_layout,
     )
     summary = _summarize(baseline, exact)
     report = {
         "gpu": torch.cuda.get_device_name(0),
         "torch": torch.__version__,
+        "backend": args.backend,
+        "scale_layout": args.scale_layout,
         "shapes_file": str(args.shapes),
         "timing": {
             "cuda_graph": True,
