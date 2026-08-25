@@ -3,6 +3,7 @@ import pytest
 from benchmarks.bench_mxfp8_backend_tactic_oracle import (
     _aggregate_candidate_rounds,
     _deduplicate_tactics,
+    _profile_from_shapes,
     _summarize_shape,
 )
 from benchmarks.bench_cutedsl_mxfp8_serving_shapes import Shape
@@ -34,6 +35,30 @@ def test_aggregate_candidate_rounds_combines_samples_and_worst_cosine():
     assert result["median_ms"] == 2.5
     assert result["samples_ms"] == [2.0, 1.0, 4.0, 3.0]
     assert result["cosine_similarity"] == 0.998
+
+
+def test_profile_from_shapes_builds_static_concrete_profile():
+    class FakeStaticDim:
+        def __init__(self, value):
+            self.val = value
+
+    class FakeProfile:
+        def __init__(self, shapes, tensor_initializers):
+            self.shapes = shapes
+            self.tensor_initializers = tensor_initializers
+
+    profile = _profile_from_shapes(
+        ((3, 8192), (8192, 2304), (0,)),
+        profile_type=FakeProfile,
+        static_dim_type=FakeStaticDim,
+    )
+
+    assert [[dim.val for dim in shape] for shape in profile.shapes] == [
+        [3, 8192],
+        [8192, 2304],
+        [0],
+    ]
+    assert profile.tensor_initializers == [None, None, None]
 
 
 def test_summarize_shape_reports_oracle_speedup_over_selected():

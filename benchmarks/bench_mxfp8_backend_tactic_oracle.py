@@ -54,6 +54,29 @@ def _deduplicate_tactics(tactics: list[Any]) -> list[Any]:
     return unique
 
 
+def _profile_from_shapes(
+    input_shapes: tuple[tuple[int, ...], ...],
+    *,
+    profile_type: Callable[..., Any],
+    static_dim_type: Callable[[int], Any],
+) -> Any:
+    shapes = [
+        [static_dim_type(dimension) for dimension in shape] for shape in input_shapes
+    ]
+    return profile_type(shapes, [None] * len(shapes))
+
+
+def _make_concrete_profile(inputs: list[Any]) -> Any:
+    from flashinfer.autotuner import AutoTuner, OptimizationProfile, StaticDim
+
+    input_shapes = AutoTuner.get()._get_input_sizes(inputs)  # noqa: SLF001
+    return _profile_from_shapes(
+        input_shapes,
+        profile_type=OptimizationProfile,
+        static_dim_type=StaticDim,
+    )
+
+
 def _capture_invocation(call: Callable[[], Any]) -> tuple[Any, dict[str, Any]]:
     from flashinfer.autotuner import AutoTuner
 
@@ -274,7 +297,7 @@ def main() -> None:
             runner = invocation["runner"]
             inputs = invocation["inputs"]
             candidates = _deduplicate_tactics(
-                list(runner.get_valid_tactics(inputs, None))
+                list(runner.get_valid_tactics(inputs, _make_concrete_profile(inputs)))
             )
             if _tactic_key(selected_tactic) not in {
                 _tactic_key(tactic) for tactic in candidates
