@@ -5,6 +5,7 @@ import pytest
 from benchmarks.bench_cutedsl_mxfp8_serving_shapes import (
     Shape,
     _aggregate_rounds,
+    _reuse_mode,
     group_shapes,
     load_shapes,
 )
@@ -89,3 +90,19 @@ def test_aggregate_rounds_rejects_unstable_tactic_selection():
 
     with pytest.raises(RuntimeError, match="Selected tactic changed"):
         _aggregate_rounds(shape, rows)
+
+
+def test_reuse_mode_requires_and_selects_native_cache(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Missing exact autotuner cache"):
+        _reuse_mode("exact", tmp_path)
+
+    cache_path = tmp_path / "exact_cache.json"
+    cache_path.write_text("{}\n")
+
+    assert _reuse_mode("exact", tmp_path) == {
+        "mode": "exact",
+        "cache_path": str(cache_path),
+        "cache_source": "reused",
+        "tuning_time_s": 0.0,
+        "shapes": [],
+    }

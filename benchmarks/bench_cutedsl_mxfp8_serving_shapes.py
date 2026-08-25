@@ -269,7 +269,21 @@ def _tune_mode(
     return {
         "mode": mode,
         "cache_path": str(cache_path),
+        "cache_source": "generated",
         "tuning_time_s": tuning_time_s,
+        "shapes": [],
+    }
+
+
+def _reuse_mode(mode: str, cache_dir: Path) -> dict[str, Any]:
+    cache_path = cache_dir / f"{mode}_cache.json"
+    if not cache_path.is_file():
+        raise FileNotFoundError(f"Missing {mode} autotuner cache: {cache_path}")
+    return {
+        "mode": mode,
+        "cache_path": str(cache_path),
+        "cache_source": "reused",
+        "tuning_time_s": 0.0,
         "shapes": [],
     }
 
@@ -382,6 +396,11 @@ def main() -> None:
     parser.add_argument("--dry-run-iters", type=int, default=10)
     parser.add_argument("--repeat-iters", type=int, default=30)
     parser.add_argument("--pair-rounds", type=int, default=3)
+    parser.add_argument(
+        "--reuse-cache-dir",
+        type=Path,
+        help="Load hybrid_cache.json and exact_cache.json without autotuning",
+    )
     args = parser.parse_args()
 
     if args.dry_run_iters < 0:
@@ -399,18 +418,22 @@ def main() -> None:
     shapes = load_shapes(args.shapes)
     groups = group_shapes(shapes)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    baseline = _tune_mode(
-        mode="hybrid",
-        groups=groups,
-        output_dir=args.output_dir,
-        seed=args.seed,
-    )
-    exact = _tune_mode(
-        mode="exact",
-        groups=groups,
-        output_dir=args.output_dir,
-        seed=args.seed,
-    )
+    if args.reuse_cache_dir is None:
+        baseline = _tune_mode(
+            mode="hybrid",
+            groups=groups,
+            output_dir=args.output_dir,
+            seed=args.seed,
+        )
+        exact = _tune_mode(
+            mode="exact",
+            groups=groups,
+            output_dir=args.output_dir,
+            seed=args.seed,
+        )
+    else:
+        baseline = _reuse_mode("hybrid", args.reuse_cache_dir)
+        exact = _reuse_mode("exact", args.reuse_cache_dir)
     _benchmark_pairs(
         groups=groups,
         baseline=baseline,
