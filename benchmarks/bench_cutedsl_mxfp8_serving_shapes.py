@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import statistics
+import sys
 import time
 from collections import defaultdict
 from dataclasses import asdict, dataclass
@@ -23,6 +24,53 @@ from typing import Any, Callable, Literal
 
 Backend = Literal["cute-dsl", "cutlass", "trtllm"]
 ScaleLayout = Literal["8x4", "128x4"]
+
+_JIT_DEPENDENCY_PATHS = (
+    Path("cutlass/include"),
+    Path("cutlass/tools/util/include"),
+    Path("spdlog/include"),
+    Path("cccl/cub"),
+    Path("cccl/libcudacxx/include"),
+    Path("cccl/thrust"),
+)
+
+
+def _find_jit_dependency_root(
+    source_root: Path, import_roots: list[Path]
+) -> Path:
+    candidates = [source_root / "3rdparty"]
+    candidates.extend(root / "flashinfer" / "data" for root in import_roots)
+    for candidate in candidates:
+        if all((candidate / path).is_dir() for path in _JIT_DEPENDENCY_PATHS):
+            return candidate
+    raise FileNotFoundError(
+        "Could not find CUTLASS, CCCL, and spdlog headers in the source tree "
+        "or an installed FlashInfer package"
+    )
+
+
+def _configure_source_jit_paths() -> None:
+    source_root = Path(__file__).resolve().parents[1]
+    if not (source_root / "csrc").is_dir():
+        return
+
+    from flashinfer.jit import env as jit_env
+
+    dependency_root = _find_jit_dependency_root(
+        source_root, [Path(path) for path in sys.path if path]
+    )
+    jit_env.FLASHINFER_CSRC_DIR = source_root / "csrc"
+    jit_env.FLASHINFER_INCLUDE_DIR = source_root / "include"
+    jit_env.CUTLASS_INCLUDE_DIRS = [
+        dependency_root / "cutlass" / "include",
+        dependency_root / "cutlass" / "tools" / "util" / "include",
+    ]
+    jit_env.SPDLOG_INCLUDE_DIR = dependency_root / "spdlog" / "include"
+    jit_env.CCCL_INCLUDE_DIRS = [
+        dependency_root / "cccl" / "cub",
+        dependency_root / "cccl" / "libcudacxx" / "include",
+        dependency_root / "cccl" / "thrust",
+    ]
 
 
 @dataclass(frozen=True, order=True)
@@ -467,6 +515,7 @@ def main() -> None:
 
     if not torch.cuda.is_available():
         raise RuntimeError("This benchmark requires a CUDA GPU")
+    _configure_source_jit_paths()
 
     shapes = load_shapes(args.shapes)
     groups = group_shapes(shapes)

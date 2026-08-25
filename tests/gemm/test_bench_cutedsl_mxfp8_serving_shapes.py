@@ -6,11 +6,55 @@ from benchmarks.bench_cutedsl_mxfp8_serving_shapes import (
     Shape,
     _aggregate_rounds,
     _cache_path,
+    _find_jit_dependency_root,
     _reuse_mode,
     _validate_backend_layout,
     group_shapes,
     load_shapes,
 )
+
+
+def test_find_jit_dependency_root_prefers_initialized_source_tree(tmp_path):
+    source_root = tmp_path / "source"
+    for path in (
+        "cutlass/include",
+        "cutlass/tools/util/include",
+        "spdlog/include",
+        "cccl/cub",
+        "cccl/libcudacxx/include",
+        "cccl/thrust",
+    ):
+        (source_root / "3rdparty" / path).mkdir(parents=True)
+    packaged_root = tmp_path / "site" / "flashinfer" / "data"
+    for path in (
+        "cutlass/include",
+        "cutlass/tools/util/include",
+        "spdlog/include",
+        "cccl/cub",
+        "cccl/libcudacxx/include",
+        "cccl/thrust",
+    ):
+        (packaged_root / path).mkdir(parents=True)
+
+    assert _find_jit_dependency_root(source_root, [tmp_path / "site"]) == (
+        source_root / "3rdparty"
+    )
+
+
+def test_find_jit_dependency_root_falls_back_to_installed_package(tmp_path):
+    source_root = tmp_path / "source"
+    packaged_root = tmp_path / "site" / "flashinfer" / "data"
+    for path in (
+        "cutlass/include",
+        "cutlass/tools/util/include",
+        "spdlog/include",
+        "cccl/cub",
+        "cccl/libcudacxx/include",
+        "cccl/thrust",
+    ):
+        (packaged_root / path).mkdir(parents=True)
+
+    assert _find_jit_dependency_root(source_root, [tmp_path / "site"]) == packaged_root
 
 
 def test_load_shapes_normalizes_headers_and_deduplicates(tmp_path):
