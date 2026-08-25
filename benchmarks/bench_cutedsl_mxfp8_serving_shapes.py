@@ -134,7 +134,13 @@ def _make_call(problem):
 
     a_q, weight_q_t, a_scale, weight_scale, out, _ = problem
 
-    def call():
+    def call(
+        a_q=a_q,
+        weight_q_t=weight_q_t,
+        a_scale=a_scale,
+        weight_scale=weight_scale,
+        out=out,
+    ):
         return mm_mxfp8(
             a_q,
             weight_q_t,
@@ -192,12 +198,12 @@ def _tune_group(
     return elapsed
 
 
-def _benchmark_shape(
+def _benchmark_prepared_shape(
     *,
     shape: Shape,
+    problem,
     exact_m_values: tuple[int, ...] | None,
     cache_path: Path,
-    seed: int,
     dry_run_iters: int,
     repeat_iters: int,
 ) -> dict[str, Any]:
@@ -205,9 +211,10 @@ def _benchmark_shape(
     import torch
 
     from flashinfer import autotune
+    from flashinfer.autotuner import AutoTuner
     from flashinfer.testing.utils import bench_gpu_time
 
-    problem = _make_problem(shape, seed)
+    AutoTuner.get().clear_cache()
     call = _make_call(problem)
     with autotune(
         False,
@@ -218,9 +225,10 @@ def _benchmark_shape(
         cosine = _cosine_similarity(problem[-1], output)
         samples_ms = bench_gpu_time(
             call,
+            input_args=problem[:-1],
             dry_run_iters=dry_run_iters,
             repeat_iters=repeat_iters,
-            enable_cupti=True,
+            enable_cupti=False,
             use_cuda_graph=True,
             cold_l2_cache=True,
         )
@@ -229,25 +237,23 @@ def _benchmark_shape(
         "median_ms": float(np.median(samples_ms)),
         "p10_ms": float(np.percentile(samples_ms, 10)),
         "p90_ms": float(np.percentile(samples_ms, 90)),
+        "samples_ms": [float(sample) for sample in samples_ms],
         "cosine_similarity": cosine,
         **selection,
     }
-    del problem, output
+    del output
     torch.cuda.empty_cache()
     return row
 
 
-def _run_mode(
+def _tune_mode(
     *,
     mode: str,
     groups: dict[tuple[int, int], tuple[int, ...]],
     output_dir: Path,
     seed: int,
-    dry_run_iters: int,
-    repeat_iters: int,
 ) -> dict[str, Any]:
     exact = mode == "exact"
-    rows = []
     tuning_time_s = 0.0
     cache_path = output_dir / f"{mode}_cache.json"
     for group_index, ((n, k), m_values) in enumerate(groups.items()):
@@ -260,23 +266,84 @@ def _run_mode(
             reset_cache=group_index == 0,
             seed=seed,
         )
-        for m in m_values:
-            rows.append(
-                _benchmark_shape(
-                    shape=Shape(m, n, k),
-                    exact_m_values=m_values if exact else None,
-                    cache_path=cache_path,
-                    seed=seed,
-                    dry_run_iters=dry_run_iters,
-                    repeat_iters=repeat_iters,
-                )
-            )
     return {
         "mode": mode,
         "cache_path": str(cache_path),
         "tuning_time_s": tuning_time_s,
-        "shapes": rows,
+        "shapes": [],
     }
+
+
+def _aggregate_rounds(shape: Shape, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    import numpy as np
+
+    tactic_keys = {json.dumps(row["tactic"], sort_keys=True) for row in rows}
+    if len(tactic_keys) != 1:
+        raise RuntimeError(f"Selected tactic changed across rounds for {shape}: {rows}")
+    samples = [sample for row in rows for sample in row["samples_ms"]]
+    return {
+        **asdict(shape),
+        "median_ms": float(np.median(samples)),
+        "p10_ms": float(np.percentile(samples, 10)),
+        "p90_ms": float(np.percentile(samples, 90)),
+        "samples_ms": samples,
+        "cosine_similarity": min(row["cosine_similarity"] for row in rows),
+        "runner": rows[0]["runner"],
+        "tactic": rows[0]["tactic"],
+    }
+
+
+def _benchmark_pairs(
+    *,
+    groups: dict[tuple[int, int], tuple[int, ...]],
+    baseline: dict[str, Any],
+    exact: dict[str, Any],
+    seed: int,
+    dry_run_iters: int,
+    repeat_iters: int,
+    pair_rounds: int,
+) -> None:
+    import torch
+
+    if pair_rounds <= 0:
+        raise ValueError(f"pair_rounds must be positive, got {pair_rounds}")
+
+    cache_by_mode = {
+        "hybrid": Path(baseline["cache_path"]),
+        "exact": Path(exact["cache_path"]),
+    }
+    output_by_mode = {"hybrid": [], "exact": []}
+    for (n, k), m_values in groups.items():
+        for m in m_values:
+            shape = Shape(m, n, k)
+            problem = _make_problem(shape, seed)
+            rounds_by_mode: dict[str, list[dict[str, Any]]] = {
+                "hybrid": [],
+                "exact": [],
+            }
+            for round_index in range(pair_rounds):
+                order = (
+                    ("hybrid", "exact") if round_index % 2 == 0 else ("exact", "hybrid")
+                )
+                for mode in order:
+                    rounds_by_mode[mode].append(
+                        _benchmark_prepared_shape(
+                            shape=shape,
+                            problem=problem,
+                            exact_m_values=m_values if mode == "exact" else None,
+                            cache_path=cache_by_mode[mode],
+                            dry_run_iters=dry_run_iters,
+                            repeat_iters=repeat_iters,
+                        )
+                    )
+            for mode in ("hybrid", "exact"):
+                output_by_mode[mode].append(
+                    _aggregate_rounds(shape, rounds_by_mode[mode])
+                )
+            del problem
+            torch.cuda.empty_cache()
+    baseline["shapes"] = output_by_mode["hybrid"]
+    exact["shapes"] = output_by_mode["exact"]
 
 
 def _summarize(baseline: dict[str, Any], exact: dict[str, Any]) -> list[dict[str, Any]]:
@@ -314,7 +381,15 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--dry-run-iters", type=int, default=10)
     parser.add_argument("--repeat-iters", type=int, default=30)
+    parser.add_argument("--pair-rounds", type=int, default=3)
     args = parser.parse_args()
+
+    if args.dry_run_iters < 0:
+        parser.error("--dry-run-iters must be non-negative")
+    if args.repeat_iters <= 0:
+        parser.error("--repeat-iters must be positive")
+    if args.pair_rounds <= 0:
+        parser.error("--pair-rounds must be positive")
 
     import torch
 
@@ -324,27 +399,38 @@ def main() -> None:
     shapes = load_shapes(args.shapes)
     groups = group_shapes(shapes)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    baseline = _run_mode(
+    baseline = _tune_mode(
         mode="hybrid",
         groups=groups,
         output_dir=args.output_dir,
         seed=args.seed,
-        dry_run_iters=args.dry_run_iters,
-        repeat_iters=args.repeat_iters,
     )
-    exact = _run_mode(
+    exact = _tune_mode(
         mode="exact",
         groups=groups,
         output_dir=args.output_dir,
         seed=args.seed,
+    )
+    _benchmark_pairs(
+        groups=groups,
+        baseline=baseline,
+        exact=exact,
+        seed=args.seed,
         dry_run_iters=args.dry_run_iters,
         repeat_iters=args.repeat_iters,
+        pair_rounds=args.pair_rounds,
     )
     summary = _summarize(baseline, exact)
     report = {
         "gpu": torch.cuda.get_device_name(0),
         "torch": torch.__version__,
         "shapes_file": str(args.shapes),
+        "timing": {
+            "cuda_graph": True,
+            "cold_l2_cache": True,
+            "timer": "cuda_events",
+            "pair_rounds": args.pair_rounds,
+        },
         "baseline": baseline,
         "exact": exact,
         "summary": summary,
