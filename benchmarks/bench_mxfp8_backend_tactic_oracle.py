@@ -16,6 +16,7 @@ import math
 import os
 import random
 import statistics
+import time
 from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
@@ -343,6 +344,7 @@ def main() -> None:
     }
 
     tuner = AutoTuner.get()
+    profiling_started = time.perf_counter()
     for (n, k), m_values in groups.items():
         for m in m_values:
             shape = Shape(m, n, k)
@@ -423,6 +425,13 @@ def main() -> None:
             report["max_regret_pct"] = max(row["regret_pct"] for row in shape_results)
             report["same_tactic_count"] = sum(
                 row["same_tactic"] for row in shape_results
+            )
+            report["profiling_wall_s"] = time.perf_counter() - profiling_started
+            report["measured_candidate_gpu_s"] = sum(
+                sample / 1000.0
+                for shape_row in shape_results
+                for candidate in shape_row["candidates"]
+                for sample in candidate["samples_ms"]
             )
             _write_report(report_path, report)
             print(
