@@ -109,8 +109,20 @@ def test_summarize_shape_reports_oracle_speedup_over_selected():
         runner_name="CuteRunner",
         selected_tactic=11,
         candidates=[
-            {"tactic": 11, "median_ms": 12.0, "cosine_similarity": 0.999},
-            {"tactic": 12, "median_ms": 10.0, "cosine_similarity": 0.998},
+            {
+                "tactic": 11,
+                "median_ms": 12.0,
+                "cosine_similarity": 0.999,
+                "finite": True,
+                "matches_selected": True,
+            },
+            {
+                "tactic": 12,
+                "median_ms": 10.0,
+                "cosine_similarity": 0.998,
+                "finite": True,
+                "matches_selected": True,
+            },
         ],
         min_cosine=0.98,
     )
@@ -144,11 +156,15 @@ def test_summarize_shape_ignores_incorrect_candidate():
                 "tactic": [[128, 32], [1, 1], True, False, 1],
                 "median_ms": 12.0,
                 "cosine_similarity": 0.999,
+                "finite": True,
+                "matches_selected": True,
             },
             {
                 "tactic": [[128, 64], [1, 1], False, False, 1],
                 "median_ms": 8.0,
                 "cosine_similarity": 0.50,
+                "finite": True,
+                "matches_selected": True,
             },
         ],
         min_cosine=0.98,
