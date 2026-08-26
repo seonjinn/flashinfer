@@ -305,6 +305,7 @@ def main() -> None:
         parser.error(str(error))
 
     import torch
+    import flashinfer
 
     from flashinfer.autotuner import AutoTuner
 
@@ -330,6 +331,9 @@ def main() -> None:
         "backend": args.backend,
         "scale_layout": args.scale_layout,
         "flashinfer_commit": os.getenv("FLASHINFER_COMMIT"),
+        "flashinfer_version": flashinfer.__version__,
+        "flashinfer_file": flashinfer.__file__,
+        "container_sha256": os.getenv("CONTAINER_SHA256"),
         "selected_tactics_file": str(args.selected_tactics),
         "shapes_file": str(args.shapes),
         "timing": {
