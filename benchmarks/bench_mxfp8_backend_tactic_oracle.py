@@ -51,21 +51,19 @@ def _restore_tactic(tactic: Any) -> Any:
     return tactic
 
 
-def _load_selected_tactics(path: Path) -> dict[Shape, dict[str, Any]]:
-    selected: dict[Shape, dict[str, Any]] = {}
+def _load_selected_tactics(path: Path) -> dict[tuple[Shape, str], Any]:
+    selected: dict[tuple[Shape, str], Any] = {}
     with path.open(newline="") as handle:
         for row in csv.DictReader(handle):
             shape = Shape(int(row["m"]), int(row["n"]), int(row["k"]))
-            record = {
-                "runner": row["runner"],
-                "tactic": _restore_tactic(json.loads(row["selected_tactic"])),
-            }
-            previous = selected.get(shape)
-            if previous is not None and previous != record:
+            key = (shape, row["runner"])
+            tactic = _restore_tactic(json.loads(row["selected_tactic"]))
+            if key in selected and selected[key] != tactic:
                 raise ValueError(
-                    f"conflicting selected tactics for {shape}: {previous} vs {record}"
+                    f"conflicting selected tactics for {key}: "
+                    f"{selected[key]} vs {tactic}"
                 )
-            selected[shape] = record
+            selected[key] = tactic
     if not selected:
         raise ValueError(f"selected tactic CSV is empty: {path}")
     return selected
@@ -80,6 +78,22 @@ def _deduplicate_tactics(tactics: list[Any]) -> list[Any]:
             seen.add(key)
             unique.append(tactic)
     return unique
+
+
+def _candidate_tactics(valid_tactics: list[Any], *, selected_tactic: Any) -> list[Any]:
+    candidates = _deduplicate_tactics(valid_tactics)
+    candidate_keys = {_tactic_key(tactic) for tactic in candidates}
+    if _tactic_key(selected_tactic) in candidate_keys:
+        return candidates
+    if selected_tactic == -1:
+        return [selected_tactic, *candidates]
+    raise ValueError(
+        f"selected tactic is not valid: {_normalize_tactic(selected_tactic)}"
+    )
+
+
+def _capture_selected_output(runner: Any, inputs: list[Any], tactic: Any) -> Any:
+    return runner(inputs, tactic=tactic).detach().clone()
 
 
 def _profile_from_shapes(
@@ -316,7 +330,8 @@ def main() -> None:
     shapes = load_shapes(args.shapes)
     groups = group_shapes(shapes)
     selected_tactics = _load_selected_tactics(args.selected_tactics)
-    missing_selected = sorted(set(shapes) - selected_tactics.keys())
+    selected_shapes = {shape for shape, _ in selected_tactics}
+    missing_selected = sorted(set(shapes) - selected_shapes)
     if missing_selected:
         raise ValueError(
             f"missing serving-selected tactics for {len(missing_selected)} shapes: "
@@ -358,29 +373,36 @@ def main() -> None:
             output, invocation = _capture_invocation(call)
             runner = invocation["runner"]
             inputs = invocation["inputs"]
-            selected_record = selected_tactics[shape]
-            if runner.__class__.__name__ != selected_record["runner"]:
+            runner_name = runner.__class__.__name__
+            execution_key = (shape, runner_name)
+            if execution_key not in selected_tactics:
+                recorded_runners = sorted(
+                    candidate_runner
+                    for candidate_shape, candidate_runner in selected_tactics
+                    if candidate_shape == shape
+                )
                 raise RuntimeError(
                     f"Serving runner mismatch for {shape}: "
-                    f"recorded={selected_record['runner']}, "
-                    f"oracle={runner.__class__.__name__}"
+                    f"recorded={recorded_runners}, oracle={runner_name}"
                 )
-            selected_tactic = selected_record["tactic"]
-            selected_output = runner(inputs, tactic=selected_tactic)
+            selected_tactic = selected_tactics[execution_key]
+            selected_output = _capture_selected_output(runner, inputs, selected_tactic)
             if not torch.isfinite(selected_output).all():
                 raise RuntimeError(
                     f"Serving-selected tactic produced non-finite output for {shape}"
                 )
-            candidates = _deduplicate_tactics(
-                list(runner.get_valid_tactics(inputs, _make_concrete_profile(inputs)))
-            )
-            if _tactic_key(selected_tactic) not in {
-                _tactic_key(tactic) for tactic in candidates
-            }:
+            try:
+                candidates = _candidate_tactics(
+                    list(
+                        runner.get_valid_tactics(inputs, _make_concrete_profile(inputs))
+                    ),
+                    selected_tactic=selected_tactic,
+                )
+            except ValueError as error:
                 raise RuntimeError(
                     f"Selected tactic is not valid for {shape}: "
                     f"{_normalize_tactic(selected_tactic)}"
-                )
+                ) from error
             del output
 
             rows_by_tactic: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -417,7 +439,7 @@ def main() -> None:
             ]
             shape_result = _summarize_shape(
                 shape=shape,
-                runner_name=runner.__class__.__name__,
+                runner_name=runner_name,
                 selected_tactic=selected_tactic,
                 candidates=aggregated,
                 min_cosine=args.min_cosine,

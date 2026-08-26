@@ -1,5 +1,7 @@
 import pytest
 
+from benchmarks import bench_mxfp8_backend_tactic_oracle as oracle
+
 from benchmarks.bench_mxfp8_backend_tactic_oracle import (
     _aggregate_candidate_rounds,
     _deduplicate_tactics,
@@ -19,13 +21,16 @@ def test_load_selected_tactics_preserves_serving_runner_and_nested_tactic(tmp_pa
 
     selected = _load_selected_tactics(path)
 
-    assert selected[Shape(128, 2304, 8192)] == {
-        "runner": "CuteRunner",
-        "tactic": ((128, 32), (1, 1), True, False, 1),
-    }
+    assert selected[(Shape(128, 2304, 8192), "CuteRunner")] == (
+        (128, 32),
+        (1, 1),
+        True,
+        False,
+        1,
+    )
 
 
-def test_load_selected_tactics_rejects_conflicting_execution_signatures(tmp_path):
+def test_load_selected_tactics_preserves_distinct_runner_identities(tmp_path):
     path = tmp_path / "observed.csv"
     path.write_text(
         "m,n,k,runner,selected_tactic\n"
@@ -33,8 +38,55 @@ def test_load_selected_tactics_rejects_conflicting_execution_signatures(tmp_path
         "128,2304,8192,OtherRunner,9\n"
     )
 
+    selected = _load_selected_tactics(path)
+
+    shape = Shape(128, 2304, 8192)
+    assert selected == {(shape, "CuteRunner"): 7, (shape, "OtherRunner"): 9}
+
+
+def test_load_selected_tactics_rejects_conflicting_tactic_for_same_runner(tmp_path):
+    path = tmp_path / "observed.csv"
+    path.write_text(
+        "m,n,k,runner,selected_tactic\n"
+        "128,2304,8192,CuteRunner,7\n"
+        "128,2304,8192,CuteRunner,9\n"
+    )
+
     with pytest.raises(ValueError, match="conflicting selected tactics"):
         _load_selected_tactics(path)
+
+
+def test_capture_selected_output_preserves_value_before_candidate_write():
+    class MutableOutput:
+        def __init__(self, value=0):
+            self.value = value
+
+        def fill_(self, value):
+            self.value = value
+
+        def detach(self):
+            return self
+
+        def clone(self):
+            return MutableOutput(self.value)
+
+    class InPlaceRunner:
+        def __call__(self, inputs, *, tactic):
+            inputs[0].fill_(tactic)
+            return inputs[0]
+
+    runner = InPlaceRunner()
+    inputs = [MutableOutput()]
+
+    selected_output = oracle._capture_selected_output(runner, inputs, tactic=1)
+    runner(inputs, tactic=2)
+
+    assert selected_output.value == 1
+    assert inputs[0].value == 2
+
+
+def test_candidate_tactics_includes_legal_selected_fallback():
+    assert oracle._candidate_tactics([3, 5], selected_tactic=-1) == [-1, 3, 5]
 
 
 def test_deduplicate_tactics_preserves_order_for_nested_tactics():
