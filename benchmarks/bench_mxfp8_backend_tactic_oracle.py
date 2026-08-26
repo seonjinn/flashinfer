@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Compare cached MXFP8 tactics with a CUDA Graph exhaustive oracle.
+"""Compare serving-selected MXFP8 tactics with a CUDA Graph oracle.
 
-For every observed serving shape, this benchmark loads the exact-M AutoTuner
-selection, enumerates every valid tactic exposed by the selected backend, and
-measures all candidates under CUDA Graph replay with cold L2 inputs. Candidate
-order is shuffled between rounds to reduce thermal and ordering bias.
+For every observed serving shape, this benchmark loads the tactic recorded by
+the serving process, enumerates every valid tactic exposed by the same backend,
+and measures all candidates under CUDA Graph replay with cold L2 inputs.
+Candidate order is shuffled between rounds to reduce thermal and ordering bias.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import random
 import statistics
 from collections import defaultdict
@@ -232,8 +233,8 @@ def _summarize_shape(
         row
         for row in candidates
         if row["cosine_similarity"] >= min_cosine
-        and row.get("finite", True)
-        and row.get("matches_selected", True)
+        and row.get("finite") is True
+        and row.get("matches_selected") is True
     ]
     if not correct:
         raise RuntimeError(f"No correct tactic was measured for {shape}")
@@ -250,8 +251,8 @@ def _summarize_shape(
         "oracle_tactic": oracle["tactic"],
         "oracle_ms": oracle["median_ms"],
         "oracle_cosine_similarity": oracle["cosine_similarity"],
-        "oracle_finite": oracle.get("finite", True),
-        "oracle_matches_selected": oracle.get("matches_selected", True),
+        "oracle_finite": oracle["finite"],
+        "oracle_matches_selected": oracle["matches_selected"],
         "oracle_max_abs_diff_from_selected": oracle.get(
             "max_abs_diff_from_selected", 0.0
         ),
@@ -327,6 +328,7 @@ def main() -> None:
         "torch": torch.__version__,
         "backend": args.backend,
         "scale_layout": args.scale_layout,
+        "flashinfer_commit": os.getenv("FLASHINFER_COMMIT"),
         "selected_tactics_file": str(args.selected_tactics),
         "shapes_file": str(args.shapes),
         "timing": {
