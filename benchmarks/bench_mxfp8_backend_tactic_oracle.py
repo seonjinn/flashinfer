@@ -359,6 +359,11 @@ def main() -> None:
             "repeat_iters": args.repeat_iters,
             "calls_per_graph": args.graph_calls,
         },
+        "correctness": {
+            "minimum_cosine_similarity": args.min_cosine,
+            "rtol": args.rtol,
+            "atol": args.atol,
+        },
         "shapes": shape_results,
     }
 
