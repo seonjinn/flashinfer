@@ -10,6 +10,7 @@ order is shuffled between rounds to reduce thermal and ordering bias.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import random
@@ -21,7 +22,6 @@ from typing import Any, Callable
 
 from benchmarks.bench_cutedsl_mxfp8_serving_shapes import (
     Shape,
-    _cache_path,
     _configure_source_jit_paths,
     _cosine_similarity,
     _jsonable,
@@ -41,6 +41,32 @@ def _normalize_tactic(tactic: Any) -> Any:
     if isinstance(tactic, (list, tuple)):
         return [_normalize_tactic(value) for value in tactic]
     return _jsonable(tactic)
+
+
+def _restore_tactic(tactic: Any) -> Any:
+    if isinstance(tactic, list):
+        return tuple(_restore_tactic(value) for value in tactic)
+    return tactic
+
+
+def _load_selected_tactics(path: Path) -> dict[Shape, dict[str, Any]]:
+    selected: dict[Shape, dict[str, Any]] = {}
+    with path.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            shape = Shape(int(row["m"]), int(row["n"]), int(row["k"]))
+            record = {
+                "runner": row["runner"],
+                "tactic": _restore_tactic(json.loads(row["selected_tactic"])),
+            }
+            previous = selected.get(shape)
+            if previous is not None and previous != record:
+                raise ValueError(
+                    f"conflicting selected tactics for {shape}: {previous} vs {record}"
+                )
+            selected[shape] = record
+    if not selected:
+        raise ValueError(f"selected tactic CSV is empty: {path}")
+    return selected
 
 
 def _deduplicate_tactics(tactics: list[Any]) -> list[Any]:
@@ -114,9 +140,12 @@ def _measure_candidate(
     inputs: list[Any],
     tactic: Any,
     reference: Any,
+    selected_output: Any,
     dry_run_iters: int,
     repeat_iters: int,
     graph_calls: int,
+    rtol: float,
+    atol: float,
 ) -> dict[str, Any]:
     import numpy as np
     import torch
@@ -129,6 +158,13 @@ def _measure_candidate(
     output = runner(inputs, tactic=tactic)
     torch.cuda.synchronize()
     cosine = _cosine_similarity(reference, output)
+    output_float = output.float()
+    selected_float = selected_output.float()
+    finite = bool(torch.isfinite(output_float).all().item())
+    max_abs_diff = float((output_float - selected_float).abs().max().item())
+    matches_selected = finite and torch.allclose(
+        output_float, selected_float, rtol=rtol, atol=atol
+    )
     samples = bench_gpu_time(
         fn=run,
         input_args=(inputs,),
@@ -147,6 +183,9 @@ def _measure_candidate(
         "p90_ms": float(np.percentile(samples_ms, 90)),
         "samples_ms": samples_ms,
         "cosine_similarity": cosine,
+        "finite": finite,
+        "matches_selected": matches_selected,
+        "max_abs_diff_from_selected": max_abs_diff,
     }
 
 
@@ -163,12 +202,18 @@ def _aggregate_candidate_rounds(
         "p90_ms": float(np.percentile(samples, 90)),
         "samples_ms": samples,
         "cosine_similarity": min(row["cosine_similarity"] for row in rows),
+        "finite": all(row["finite"] for row in rows),
+        "matches_selected": all(row["matches_selected"] for row in rows),
+        "max_abs_diff_from_selected": max(
+            row["max_abs_diff_from_selected"] for row in rows
+        ),
     }
 
 
 def _summarize_shape(
     *,
     shape: Shape,
+    runner_name: str,
     selected_tactic: Any,
     candidates: list[dict[str, Any]],
     min_cosine: float,
@@ -183,13 +228,20 @@ def _summarize_shape(
             f"Selected tactic was not measured for {shape}: "
             f"{_normalize_tactic(selected_tactic)}"
         )
-    correct = [row for row in candidates if row["cosine_similarity"] >= min_cosine]
+    correct = [
+        row
+        for row in candidates
+        if row["cosine_similarity"] >= min_cosine
+        and row.get("finite", True)
+        and row.get("matches_selected", True)
+    ]
     if not correct:
         raise RuntimeError(f"No correct tactic was measured for {shape}")
     oracle = min(correct, key=lambda row: row["median_ms"])
     speedup = selected["median_ms"] / oracle["median_ms"]
     return {
         **asdict(shape),
+        "runner": runner_name,
         "candidate_count": len(candidates),
         "correct_candidate_count": len(correct),
         "selected_tactic": _normalize_tactic(selected_tactic),
@@ -198,6 +250,11 @@ def _summarize_shape(
         "oracle_tactic": oracle["tactic"],
         "oracle_ms": oracle["median_ms"],
         "oracle_cosine_similarity": oracle["cosine_similarity"],
+        "oracle_finite": oracle.get("finite", True),
+        "oracle_matches_selected": oracle.get("matches_selected", True),
+        "oracle_max_abs_diff_from_selected": oracle.get(
+            "max_abs_diff_from_selected", 0.0
+        ),
         "speedup": speedup,
         "regret_pct": 100.0 * (speedup - 1.0),
         "same_tactic": selected_key == _tactic_key(oracle["tactic"]),
@@ -216,7 +273,7 @@ def _geomean(values: list[float]) -> float:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--shapes", type=Path, required=True)
-    parser.add_argument("--selected-cache-dir", type=Path, required=True)
+    parser.add_argument("--selected-tactics", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--backend", choices=("cute-dsl", "cutlass", "trtllm"), required=True
@@ -228,6 +285,8 @@ def main() -> None:
     parser.add_argument("--repeat-iters", type=int, default=30)
     parser.add_argument("--graph-calls", type=int, default=10)
     parser.add_argument("--min-cosine", type=float, default=0.98)
+    parser.add_argument("--rtol", type=float, default=0.02)
+    parser.add_argument("--atol", type=float, default=0.1)
     args = parser.parse_args()
 
     if args.rounds <= 0:
@@ -245,7 +304,6 @@ def main() -> None:
 
     import torch
 
-    from flashinfer import autotune
     from flashinfer.autotuner import AutoTuner
 
     if not torch.cuda.is_available():
@@ -254,11 +312,13 @@ def main() -> None:
 
     shapes = load_shapes(args.shapes)
     groups = group_shapes(shapes)
-    cache_path = _cache_path(
-        args.selected_cache_dir, args.backend, args.scale_layout, "exact"
-    )
-    if not cache_path.is_file():
-        raise FileNotFoundError(f"Missing exact-M AutoTuner cache: {cache_path}")
+    selected_tactics = _load_selected_tactics(args.selected_tactics)
+    missing_selected = sorted(set(shapes) - selected_tactics.keys())
+    if missing_selected:
+        raise ValueError(
+            f"missing serving-selected tactics for {len(missing_selected)} shapes: "
+            f"{missing_selected[:8]}"
+        )
     args.output_dir.mkdir(parents=True, exist_ok=True)
     report_path = args.output_dir / "report.json"
     shape_results: list[dict[str, Any]] = []
@@ -267,7 +327,7 @@ def main() -> None:
         "torch": torch.__version__,
         "backend": args.backend,
         "scale_layout": args.scale_layout,
-        "source_cache": str(cache_path),
+        "selected_tactics_file": str(args.selected_tactics),
         "shapes_file": str(args.shapes),
         "timing": {
             "cuda_graph": True,
@@ -287,15 +347,22 @@ def main() -> None:
             problem = _make_problem(shape, args.seed, args.backend, args.scale_layout)
             call = _make_call(problem, args.backend, args.scale_layout)
             tuner.clear_cache()
-            with autotune(
-                False,
-                cache=str(cache_path),
-                tuning_buckets=m_values,
-            ):
-                output, invocation = _capture_invocation(call)
-            selected_tactic = invocation["selected_tactic"]
+            output, invocation = _capture_invocation(call)
             runner = invocation["runner"]
             inputs = invocation["inputs"]
+            selected_record = selected_tactics[shape]
+            if runner.__class__.__name__ != selected_record["runner"]:
+                raise RuntimeError(
+                    f"Serving runner mismatch for {shape}: "
+                    f"recorded={selected_record['runner']}, "
+                    f"oracle={runner.__class__.__name__}"
+                )
+            selected_tactic = selected_record["tactic"]
+            selected_output = runner(inputs, tactic=selected_tactic)
+            if not torch.isfinite(selected_output).all():
+                raise RuntimeError(
+                    f"Serving-selected tactic produced non-finite output for {shape}"
+                )
             candidates = _deduplicate_tactics(
                 list(runner.get_valid_tactics(inputs, _make_concrete_profile(inputs)))
             )
@@ -325,9 +392,12 @@ def main() -> None:
                         inputs=inputs,
                         tactic=tactic,
                         reference=problem[-1],
+                        selected_output=selected_output,
                         dry_run_iters=args.dry_run_iters,
                         repeat_iters=args.repeat_iters,
                         graph_calls=args.graph_calls,
+                        rtol=args.rtol,
+                        atol=args.atol,
                     )
                     rows_by_tactic[_tactic_key(tactic)].append(row)
 
@@ -339,6 +409,7 @@ def main() -> None:
             ]
             shape_result = _summarize_shape(
                 shape=shape,
+                runner_name=runner.__class__.__name__,
                 selected_tactic=selected_tactic,
                 candidates=aggregated,
                 min_cosine=args.min_cosine,
