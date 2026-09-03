@@ -20,15 +20,20 @@ export TORCH_EXTENSIONS_DIR="${SCRATCH_ROOT}/torch_extensions"
 
 cd "${REPO_ROOT}"
 python3 - <<'PY' > "${RESULT_ROOT}/metadata.txt"
+import importlib.metadata
 import platform
 
 import flashinfer
 import torch
+import vllm
 
 print(f"python={platform.python_version()}")
+print(f"vllm={vllm.__version__}")
 print(f"torch={torch.__version__}")
 print(f"cuda={torch.version.cuda}")
 print(f"flashinfer={getattr(flashinfer, '__version__', 'unknown')}")
+print(f"flashinfer_package={importlib.metadata.version('flashinfer-python')}")
+print(f"cutlass_dsl={importlib.metadata.version('nvidia-cutlass-dsl')}")
 print(f"device={torch.cuda.get_device_name(0)}")
 print(f"capability={torch.cuda.get_device_capability(0)}")
 PY
