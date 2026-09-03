@@ -11,6 +11,16 @@ CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm_o
 STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}
 RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/flashinfer-pr4657-4684-combined/${STAMP}}
 
+for spec in "${PR4657_ROOT}:${PR4657_SHA}" "${COMBINED_ROOT}:${COMBINED_SHA}"; do
+  source_root=${spec%:*}
+  expected_sha=${spec#*:}
+  actual_sha=$(git -C "${source_root}" rev-parse HEAD)
+  if [[ "${actual_sha}" != "${expected_sha}" ]]; then
+    echo "Expected ${expected_sha}, found ${actual_sha} in ${source_root}" >&2
+    exit 1
+  fi
+done
+
 mkdir -p "${RESULT_ROOT}"
 printf '%s\n' \
   "control_root=${CONTROL_ROOT}" \

@@ -11,12 +11,6 @@ REPEATS=${REPEATS:-4}
 NUM_ITERS=${NUM_ITERS:-100}
 DRY_RUN_ITERS=${DRY_RUN_ITERS:-10}
 
-actual_sha=$(git -C "${REPO_ROOT}" rev-parse HEAD)
-if [[ "${actual_sha}" != "${EXPECTED_SHA}" ]]; then
-  echo "Expected ${EXPECTED_SHA}, found ${actual_sha} in ${REPO_ROOT}" >&2
-  exit 1
-fi
-
 mkdir -p "${RESULT_ROOT}"/{logs,raw} "${SCRATCH_ROOT}"/{cache,torch_extensions}
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export FLASHINFER_WORKSPACE_BASE="${SCRATCH_ROOT}/cache/flashinfer"
@@ -36,7 +30,7 @@ print(f"flashinfer={getattr(flashinfer, '__version__', 'unknown')}")
 print(f"device={torch.cuda.get_device_name(0)}")
 print(f"capability={torch.cuda.get_device_capability(0)}")
 PY
-printf 'source_label=%s\nsource_sha=%s\n' "${SOURCE_LABEL}" "${actual_sha}" \
+printf 'source_label=%s\nsource_sha=%s\n' "${SOURCE_LABEL}" "${EXPECTED_SHA}" \
   >> "${RESULT_ROOT}/metadata.txt"
 
 generate_testlist() {
