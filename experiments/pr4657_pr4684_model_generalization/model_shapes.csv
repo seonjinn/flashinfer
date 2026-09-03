@@ -1,0 +1,14 @@
+model,topology,projection,n,k,source
+Nemotron-3-Ultra-550B,TP4/DP1,attention.qkv_proj,2304,8192,model_projection_dimensions.csv
+Nemotron-3-Ultra-550B,TP4/DP1,attention.o_proj,8192,2048,model_projection_dimensions.csv
+Nemotron-3-Ultra-550B,TP4/DP1,shared_expert.up_proj,2560,8192,model_projection_dimensions.csv
+Nemotron-3-Ultra-550B,TP4/DP1,shared_expert.down_proj,8192,2560,model_projection_dimensions.csv
+Nemotron-3-Ultra-550B,TP4/DP1,mamba.in_proj,8832,8192,model_projection_dimensions.csv
+Nemotron-3-Ultra-550B,TP4/DP1,mamba.out_proj,8192,4096,model_projection_dimensions.csv
+Nemotron-3-Super-120B,TP4/DP1,attention.qkv_proj,1280,4096,model_projection_dimensions.csv
+Nemotron-3-Super-120B,TP4/DP1,attention.o_proj,4096,1024,model_projection_dimensions.csv
+Nemotron-3-Super-120B,TP4/DP1,shared_expert.up_proj,1408,4096,model_projection_dimensions.csv
+Nemotron-3-Super-120B,TP4/DP1,mamba.in_proj,4736,4096,model_projection_dimensions.csv
+Nemotron-3-Super-120B,TP4/DP1,mamba.out_proj,4096,2048,model_projection_dimensions.csv
+Qwen3-30B-A3B,TP4/DP1,attention.qkv_proj,1280,2048,Qwen/Qwen3-30B-A3B config.json
+Qwen3-30B-A3B,TP4/DP1,attention.o_proj,2048,1024,Qwen/Qwen3-30B-A3B config.json
