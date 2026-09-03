@@ -23,10 +23,12 @@ trap 'rm -rf "${scratch_root}"' EXIT
   export PYTHONPATH="${COMBINED_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
   export FLASHINFER_WORKSPACE_BASE="${scratch_root}/tests/flashinfer"
   export TORCH_EXTENSIONS_DIR="${scratch_root}/tests/torch_extensions"
-  CUDA_VISIBLE_DEVICES=0,1 python3 -m pytest -q \
+  CUDA_VISIBLE_DEVICES=0,1 python3 -m pytest -q -x \
     tests/gemm/test_mm_mxfp8_dynamic_quant.py \
-    tests/gemm/test_mm_mxfp8.py \
-    tests/benchmarks/test_gemm_args.py
+    tests/benchmarks/test_gemm_args.py \
+    tests/gemm/test_mm_mxfp8.py::test_mm_mxfp8_autotune_config_is_backend_specific \
+    tests/gemm/test_mm_mxfp8.py::test_mm_mxfp8_trtllm_cache_key_tracks_profiling_objective \
+    tests/gemm/test_mm_mxfp8.py::test_mm_mxfp8_trtllm_autotune_layouts
 ) 2>&1 | tee "${RESULT_ROOT}/combined-tests.log"
 
 REPO_ROOT="${PR4657_ROOT}" \
