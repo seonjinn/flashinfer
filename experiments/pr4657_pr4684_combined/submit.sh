@@ -25,7 +25,6 @@ args=(
   --account=coreai_dlalgo_llm
   --partition=gb200
   --nodes=1
-  --gres=gpu:4
   --time=04:00:00
   --job-name=coreai_dlalgo_llm-flashinfer.pr4657-4684
   --output="${RESULT_ROOT}/slurm-%j.out"

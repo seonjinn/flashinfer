@@ -2,7 +2,6 @@
 #SBATCH --account=coreai_dlalgo_llm
 #SBATCH --partition=gb200
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:4
 #SBATCH --time=04:00:00
 #SBATCH --job-name=coreai_dlalgo_llm-flashinfer.pr4657-4684
 
