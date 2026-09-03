@@ -11,6 +11,7 @@ SCRATCH_ROOT=${SCRATCH_ROOT:?set SCRATCH_ROOT}
 REPEATS=${REPEATS:-4}
 NUM_ITERS=${NUM_ITERS:-100}
 DRY_RUN_ITERS=${DRY_RUN_ITERS:-10}
+INCLUDE_CUTE_DSL=${INCLUDE_CUTE_DSL:-0}
 
 mkdir -p "${RESULT_ROOT}"/{logs,raw} "${SCRATCH_ROOT}"/{cache,torch_extensions}
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
@@ -39,13 +40,19 @@ generate_testlist() {
   local testlist=$1
   local cache=$2
   TESTLIST="${testlist}" CACHE="${cache}" SHAPES="${CONTROL_ROOT}/model_shapes.csv" \
+    INCLUDE_CUTE_DSL="${INCLUDE_CUTE_DSL}" \
     NUM_ITERS="${NUM_ITERS}" DRY_RUN_ITERS="${DRY_RUN_ITERS}" python3 - <<'PY'
 import csv
 import os
 from pathlib import Path
 
 ms = (1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384)
-modes = (("fixed-8x4", "8x4"), ("adaptive", "auto"))
+modes = [
+    ("fixed-8x4", "8x4", "trtllm"),
+    ("adaptive", "auto", "trtllm"),
+]
+if os.environ["INCLUDE_CUTE_DSL"] == "1":
+    modes.append(("cute-dsl", "128x4", "cute-dsl"))
 common = (
     f"--autotune --autotune_cache {os.environ['CACHE']} "
     f"--num_iters {os.environ['NUM_ITERS']} "
@@ -58,7 +65,7 @@ with Path(os.environ["SHAPES"]).open(newline="") as stream:
 lines = []
 for row in projections:
     for m in ms:
-        for mode, layout in modes:
+        for mode, layout, backend in modes:
             tags = ";".join(
                 (
                     f"model={row['model']}",
@@ -71,7 +78,7 @@ for row in projections:
             lines.append(
                 f"--routine mm_mxfp8 --m {m} --n {row['n']} --k {row['k']} "
                 f"--dynamic_quant --dynamic_quant_layout {layout} "
-                f"--backends trtllm --case_tag {tags} {common}"
+                f"--backends {backend} --case_tag {tags} {common}"
             )
 Path(os.environ["TESTLIST"]).write_text("\n".join(lines) + "\n")
 PY

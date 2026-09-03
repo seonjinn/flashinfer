@@ -12,3 +12,5 @@ Nemotron-3-Super-120B,TP4/DP1,mamba.in_proj,4736,4096,model_projection_dimension
 Nemotron-3-Super-120B,TP4/DP1,mamba.out_proj,4096,2048,model_projection_dimensions.csv
 Qwen3-30B-A3B,TP4/DP1,attention.qkv_proj,1280,2048,Qwen/Qwen3-30B-A3B config.json
 Qwen3-30B-A3B,TP4/DP1,attention.o_proj,2048,1024,Qwen/Qwen3-30B-A3B config.json
+Qwen3-235B-A22B,TP4/DP1,attention.qkv_proj,2304,4096,model_projection_dimensions.csv
+Qwen3-235B-A22B,TP4/DP1,attention.o_proj,4096,2048,model_projection_dimensions.csv

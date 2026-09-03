@@ -23,6 +23,7 @@ CONTROL_ROOT="${CONTROL_ROOT}" \
 RESULT_ROOT="${RESULT_ROOT}/pr4657" \
 EXPECTED_SHA="${PR4657_SHA}" \
 SOURCE_LABEL=pr4657 \
+INCLUDE_CUTE_DSL=0 \
 SCRATCH_ROOT="${scratch_root}/pr4657" \
   "${CONTROL_ROOT}/run_source.sh"
 
@@ -31,6 +32,7 @@ CONTROL_ROOT="${CONTROL_ROOT}" \
 RESULT_ROOT="${RESULT_ROOT}/combined" \
 EXPECTED_SHA="${COMBINED_SHA}" \
 SOURCE_LABEL=combined \
+INCLUDE_CUTE_DSL=1 \
 SCRATCH_ROOT="${scratch_root}/combined" \
   "${CONTROL_ROOT}/run_source.sh"
 

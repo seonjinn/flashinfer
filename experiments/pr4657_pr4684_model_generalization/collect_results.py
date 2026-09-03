@@ -36,7 +36,7 @@ def summarize_model(
     topology: str,
     pr4657: dict[Key, float],
     combined: dict[Key, float],
-) -> list[tuple[str, str, str, int, float, float, float]]:
+) -> list[tuple[str, str, str, int, float, float, float, float, float]]:
     coordinates = sorted(
         (projection, shape)
         for key_model, key_topology, projection, mode, shape in pr4657
@@ -59,11 +59,19 @@ def summarize_model(
             combined[(model, topology, projection, "adaptive", shape)]
             for projection, shape in coordinates
         ],
+        "cute-dsl": [
+            combined[(model, topology, projection, "cute-dsl", shape)]
+            for projection, shape in coordinates
+        ],
     }
     baseline = arms["baseline"]
+    cute_dsl = arms["cute-dsl"]
     rows = []
     for arm, latencies in arms.items():
         speedup = geomean([base / value for base, value in zip(baseline, latencies)])
+        speedup_vs_cute_dsl = geomean(
+            [cute / value for cute, value in zip(cute_dsl, latencies)]
+        )
         rows.append(
             (
                 model,
@@ -73,6 +81,8 @@ def summarize_model(
                 geomean(latencies),
                 speedup,
                 (speedup - 1.0) * 100.0,
+                speedup_vs_cute_dsl,
+                (speedup_vs_cute_dsl - 1.0) * 100.0,
             )
         )
     return rows
@@ -100,6 +110,8 @@ def main() -> None:
                 "geomean_latency_ms",
                 "speedup_x",
                 "throughput_change_pct",
+                "speedup_vs_cute_dsl_x",
+                "throughput_change_vs_cute_dsl_pct",
             )
         )
         writer.writerows(rows)
@@ -116,9 +128,11 @@ def main() -> None:
                 "pr4657_ms",
                 "pr4684_ms",
                 "combined_ms",
+                "cute_dsl_ms",
                 "pr4657_speedup_x",
                 "pr4684_speedup_x",
                 "combined_speedup_x",
+                "combined_speedup_vs_cute_dsl_x",
             )
         )
         coordinates = sorted(
@@ -131,6 +145,9 @@ def main() -> None:
             pr4657_value = pr4657[(model, topology, projection, "adaptive", shape)]
             pr4684_value = combined[(model, topology, projection, "fixed-8x4", shape)]
             combined_value = combined[(model, topology, projection, "adaptive", shape)]
+            cute_dsl_value = combined[
+                (model, topology, projection, "cute-dsl", shape)
+            ]
             writer.writerow(
                 (
                     model,
@@ -141,9 +158,11 @@ def main() -> None:
                     pr4657_value,
                     pr4684_value,
                     combined_value,
+                    cute_dsl_value,
                     baseline / pr4657_value,
                     baseline / pr4684_value,
                     baseline / combined_value,
+                    cute_dsl_value / combined_value,
                 )
             )
 
@@ -156,13 +175,23 @@ def main() -> None:
         )
         stream.write(
             "| Model | Topology | Arm | Shape count | Geomean latency (ms) | "
-            "Speedup vs baseline | Throughput change |\n"
+            "Speedup vs baseline | Throughput change | vs CuTeDSL |\n"
         )
-        stream.write("|---|---|---|---:|---:|---:|---:|\n")
-        for model, topology, arm, count, latency, speedup, change in rows:
+        stream.write("|---|---|---|---:|---:|---:|---:|---:|\n")
+        for (
+            model,
+            topology,
+            arm,
+            count,
+            latency,
+            speedup,
+            change,
+            speedup_vs_cute_dsl,
+            _,
+        ) in rows:
             stream.write(
                 f"| {model} | {topology} | {arm} | {count} | {latency:.6f} | "
-                f"{speedup:.4f}x | {change:+.2f}% |\n"
+                f"{speedup:.4f}x | {change:+.2f}% | {speedup_vs_cute_dsl:.4f}x |\n"
             )
         stream.write(
             "\nThese are equal-weight kernel results across model projection/M pairs, not "
