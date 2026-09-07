@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-CONTROL_ROOT=${CONTROL_ROOT:-/home/sna/flashinfer-pr4657-4684-combined/experiments/mxfp8_exhaustive_tactics_20260906}
+CONTROL_ROOT=${CONTROL_ROOT:-/home/sna/flashinfer-mxfp8-exhaustive-harness/experiments/mxfp8_exhaustive_tactics_20260906}
 PRUNED_ROOT=${PRUNED_ROOT:-/home/sna/flashinfer-mxfp8-exhaustive-control}
 EXHAUSTIVE_ROOT=${EXHAUSTIVE_ROOT:-/home/sna/flashinfer-mxfp8-exhaustive-tactics}
 PRUNED_SHA=${PRUNED_SHA:-465a4abafb336a2f01b63e2b1e56d1c51062b7bc}
