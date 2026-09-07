@@ -23,7 +23,11 @@ trap 'rm -rf "${scratch_root}"' EXIT
   export PYTHONPATH="${EXHAUSTIVE_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
   export FLASHINFER_WORKSPACE_BASE="${scratch_root}/tests/flashinfer"
   export TORCH_EXTENSIONS_DIR="${scratch_root}/tests/torch"
-  CUDA_VISIBLE_DEVICES=0,1 python3 -m pytest -q -x \
+  export PATCH_CSRC="${EXHAUSTIVE_ROOT}/csrc"
+  export EMPTY_AOT="${scratch_root}/tests/empty-aot"
+  mkdir -p "${EMPTY_AOT}"
+  CUDA_VISIBLE_DEVICES=0,1 python3 "${CONTROL_ROOT}/run_with_source_jit.py" \
+    -m pytest -q -x \
     tests/gemm/test_mm_mxfp8_dynamic_quant.py
 ) 2>&1 | tee "${RESULT_ROOT}/tests.log"
 
@@ -32,7 +36,11 @@ trap 'rm -rf "${scratch_root}"' EXIT
   export PYTHONPATH="${EXHAUSTIVE_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
   export FLASHINFER_WORKSPACE_BASE="${scratch_root}/inventory/flashinfer"
   export TORCH_EXTENSIONS_DIR="${scratch_root}/inventory/torch"
-  CUDA_VISIBLE_DEVICES=0 python3 "${CONTROL_ROOT}/candidate_inventory.py" \
+  export PATCH_CSRC="${EXHAUSTIVE_ROOT}/csrc"
+  export EMPTY_AOT="${scratch_root}/inventory/empty-aot"
+  mkdir -p "${EMPTY_AOT}"
+  CUDA_VISIBLE_DEVICES=0 python3 "${CONTROL_ROOT}/run_with_source_jit.py" \
+    "${CONTROL_ROOT}/candidate_inventory.py" \
     "${RESULT_ROOT}/candidate_inventory.csv"
 ) 2>&1 | tee "${RESULT_ROOT}/candidate-inventory.log"
 

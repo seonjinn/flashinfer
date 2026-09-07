@@ -11,6 +11,8 @@ The two source trees share the same PR 4657 and FlashInfer main merge base:
 The GB200 run records candidate counts, selected tactics, one-time autotuning
 wall time, kernel latency, and reference-check results. Build and JIT caches use
 node-local `/raid/scratch`; durable CSV, JSON, metadata, and logs use `/lustre`.
+The harness forces the TRTLLM wrapper through source JIT so an installed AOT
+module cannot hide C++ changes in the checkout.
 
 Run on Lyris from the experiment checkout:
 

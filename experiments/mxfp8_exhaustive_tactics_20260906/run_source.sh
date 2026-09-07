@@ -18,9 +18,12 @@ if [[ "${actual_sha}" != "${EXPECTED_SHA}" ]]; then
 fi
 
 mkdir -p "${RESULT_ROOT}"/{logs,raw,cache} "${SCRATCH_ROOT}"/{flashinfer,torch}
+mkdir -p "${SCRATCH_ROOT}/empty-aot"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export FLASHINFER_WORKSPACE_BASE="${SCRATCH_ROOT}/flashinfer"
 export TORCH_EXTENSIONS_DIR="${SCRATCH_ROOT}/torch"
+export PATCH_CSRC="${REPO_ROOT}/csrc"
+export EMPTY_AOT="${SCRATCH_ROOT}/empty-aot"
 
 cd "${REPO_ROOT}"
 python3 - <<'PY' > "${RESULT_ROOT}/metadata.txt"
@@ -39,12 +42,9 @@ PY
 printf 'source_label=%s\nsource_sha=%s\n' "${SOURCE_LABEL}" "${EXPECTED_SHA}" \
   >> "${RESULT_ROOT}/metadata.txt"
 
-CUDA_VISIBLE_DEVICES=0 python3 - <<'PY' > "${RESULT_ROOT}/logs/jit-warmup.log" 2>&1
-from flashinfer.gemm.gemm_base import get_trtllm_gemm_module
-
-module = get_trtllm_gemm_module()
-print(module.trtllm_mxfp8_gemm_tactics(4, 2304, 8192, True))
-PY
+CUDA_VISIBLE_DEVICES=0 python3 "${CONTROL_ROOT}/run_with_source_jit.py" \
+  "${CONTROL_ROOT}/jit_warmup.py" \
+  > "${RESULT_ROOT}/logs/jit-warmup.log" 2>&1
 
 generate_testlist() {
   local testlist=$1
@@ -98,7 +98,8 @@ for repetition in $(seq 1 "${REPEATS}"); do
   generate_testlist "${testlist}" "${cache}"
   (
     start=$(date +%s.%N)
-    CUDA_VISIBLE_DEVICES="${device}" python3 benchmarks/flashinfer_benchmark.py \
+    CUDA_VISIBLE_DEVICES="${device}" python3 "${CONTROL_ROOT}/run_with_source_jit.py" \
+      benchmarks/flashinfer_benchmark.py \
       --testlist "${testlist}" \
       --output_path "${output}" \
       > "${log}" 2>&1
