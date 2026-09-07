@@ -8,6 +8,7 @@ EXHAUSTIVE_ROOT=${EXHAUSTIVE_ROOT:-/home/sna/flashinfer-mxfp8-exhaustive-tactics
 PRUNED_SHA=${PRUNED_SHA:-465a4abafb336a2f01b63e2b1e56d1c51062b7bc}
 EXHAUSTIVE_SHA=${EXHAUSTIVE_SHA:-6fab535dc01b18e37a7cdeb70c526a0dcab05aed}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm_openai_v0271_aarch64_20260813_2688476.sqsh}
+PARTITION=${PARTITION:-gb200}
 STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}
 RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/flashinfer-mxfp8-exhaustive-tactics/${STAMP}}
 
@@ -29,11 +30,12 @@ printf '%s\n' \
   "exhaustive_root=${EXHAUSTIVE_ROOT}" \
   "exhaustive_sha=${EXHAUSTIVE_SHA}" \
   "container=${CONTAINER}" \
+  "partition=${PARTITION}" \
   > "${RESULT_ROOT}/submission.txt"
 
 args=(
   --account=coreai_dlalgo_llm
-  --partition=gb200
+  --partition="${PARTITION}"
   --nodes=1
   --time=04:00:00
   --job-name=coreai_dlalgo_llm-flashinfer.exhaustive-tactics
