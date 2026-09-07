@@ -42,13 +42,18 @@ from .routergemm import (
     mm_M1_16_K6144_N256 as mm_M1_16_K6144_N256,
     mm_M1_16_K7168_N128 as mm_M1_16_K7168_N128,
     mm_M1_16_K7168_N256 as mm_M1_16_K7168_N256,
+    mm_M1_16_K7168_N256_bf16 as mm_M1_16_K7168_N256_bf16,
+    mm_M1_16_K7168_N384 as mm_M1_16_K7168_N384,
+    mm_M1_16_K7168_N384_bf16 as mm_M1_16_K7168_N384_bf16,
+    mm_M1_16_K7168_N896 as mm_M1_16_K7168_N896,
+    mm_M1_16_K7168_N896_bf16 as mm_M1_16_K7168_N896_bf16,
     tinygemm_bf16 as tinygemm_bf16,
 )
 
 # Import CuTe-DSL kernels if available
 _cute_dsl_kernels = []
 try:
-    from flashinfer.cute_dsl.utils import (
+    from flashinfer.cute_dsl.availability import (
         is_cute_dsl_available,
         is_rubin_cute_dsl_available,
     )
@@ -61,11 +66,15 @@ try:
             Sm100BlockScaledPersistentDenseGemmKernel as Sm100BlockScaledPersistentDenseGemmKernel,
             create_scale_factor_tensor as create_scale_factor_tensor,
         )
+        from .kernels.cute_dsl.low_latency_blockscaled_gemm import (
+            LowLatencyBlockscaledGemmKernel as LowLatencyBlockscaledGemmKernel,
+        )
 
         _cute_dsl_kernels = [
             "grouped_gemm_nt_masked",
             "Sm100BlockScaledPersistentDenseGemmKernel",
             "create_scale_factor_tensor",
+            "LowLatencyBlockscaledGemmKernel",
         ]
 
         # The SM107 kernel imports cutlass.utils.rubin_helpers at module scope,
@@ -82,7 +91,7 @@ except ImportError:
     pass
 
 try:
-    from flashinfer.cute_dsl.utils import is_cute_dsl_available
+    from flashinfer.cute_dsl.availability import is_cute_dsl_available
 
     if is_cute_dsl_available():
         from .kernels.dense_blockscaled_gemm_sm120_b12x import (
@@ -139,6 +148,11 @@ __all__ = (
         "mm_M1_16_K6144_N256",
         "mm_M1_16_K7168_N128",
         "mm_M1_16_K7168_N256",
+        "mm_M1_16_K7168_N256_bf16",
+        "mm_M1_16_K7168_N384",
+        "mm_M1_16_K7168_N384_bf16",
+        "mm_M1_16_K7168_N896",
+        "mm_M1_16_K7168_N896_bf16",
         "tinygemm_bf16",
     ]
     + _cute_dsl_kernels
