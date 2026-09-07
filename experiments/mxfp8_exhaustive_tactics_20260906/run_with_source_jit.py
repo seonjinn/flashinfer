@@ -29,6 +29,7 @@ def main() -> None:
 
     script = sys.argv[1]
     sys.argv = sys.argv[1:]
+    sys.path.insert(0, str(Path(script).resolve().parent))
     runpy.run_path(script, run_name="__main__")
 
 
