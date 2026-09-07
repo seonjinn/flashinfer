@@ -21,8 +21,7 @@ export PATCH_INCLUDE="${REPO_ROOT}/include"
 export EMPTY_AOT="${SCRATCH_ROOT}/empty-aot"
 
 cd "${REPO_ROOT}"
-HARNESS_ROOT=$(cd "${CONTROL_ROOT}/../.." && pwd)
-BENCHMARK_SCRIPT=${BENCHMARK_SCRIPT:-${HARNESS_ROOT}/benchmarks/flashinfer_benchmark.py}
+BENCHMARK_SCRIPT=${BENCHMARK_SCRIPT:-${PRUNED_ROOT}/benchmarks/flashinfer_benchmark.py}
 if [[ ! -f "${BENCHMARK_SCRIPT}" ]]; then
   echo "Missing benchmark driver: ${BENCHMARK_SCRIPT}" >&2
   exit 2
