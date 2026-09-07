@@ -23,6 +23,7 @@ export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export FLASHINFER_WORKSPACE_BASE="${SCRATCH_ROOT}/flashinfer"
 export TORCH_EXTENSIONS_DIR="${SCRATCH_ROOT}/torch"
 export PATCH_CSRC="${REPO_ROOT}/csrc"
+export PATCH_INCLUDE="${REPO_ROOT}/include"
 export EMPTY_AOT="${SCRATCH_ROOT}/empty-aot"
 
 cd "${REPO_ROOT}"

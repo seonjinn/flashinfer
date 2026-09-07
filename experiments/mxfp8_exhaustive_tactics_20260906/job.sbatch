@@ -24,6 +24,7 @@ trap 'rm -rf "${scratch_root}"' EXIT
   export FLASHINFER_WORKSPACE_BASE="${scratch_root}/tests/flashinfer"
   export TORCH_EXTENSIONS_DIR="${scratch_root}/tests/torch"
   export PATCH_CSRC="${EXHAUSTIVE_ROOT}/csrc"
+  export PATCH_INCLUDE="${EXHAUSTIVE_ROOT}/include"
   export EMPTY_AOT="${scratch_root}/tests/empty-aot"
   mkdir -p "${EMPTY_AOT}"
   CUDA_VISIBLE_DEVICES=0,1 python3 "${CONTROL_ROOT}/run_with_source_jit.py" \
@@ -37,6 +38,7 @@ trap 'rm -rf "${scratch_root}"' EXIT
   export FLASHINFER_WORKSPACE_BASE="${scratch_root}/inventory/flashinfer"
   export TORCH_EXTENSIONS_DIR="${scratch_root}/inventory/torch"
   export PATCH_CSRC="${EXHAUSTIVE_ROOT}/csrc"
+  export PATCH_INCLUDE="${EXHAUSTIVE_ROOT}/include"
   export EMPTY_AOT="${scratch_root}/inventory/empty-aot"
   mkdir -p "${EMPTY_AOT}"
   CUDA_VISIBLE_DEVICES=0 python3 "${CONTROL_ROOT}/run_with_source_jit.py" \

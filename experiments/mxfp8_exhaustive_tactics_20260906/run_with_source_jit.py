@@ -10,6 +10,7 @@ from flashinfer.jit import env as jit_env
 
 def main() -> None:
     jit_env.FLASHINFER_CSRC_DIR = Path(os.environ["PATCH_CSRC"])
+    jit_env.FLASHINFER_INCLUDE_DIR = Path(os.environ["PATCH_INCLUDE"])
     jit_env.FLASHINFER_AOT_DIR = Path(os.environ["EMPTY_AOT"])
 
     if sys.argv[1:2] == ["-m"]:
