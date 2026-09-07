@@ -160,6 +160,45 @@ def test_dynamic_quant_runner_requests_exhaustive_tactics(
     assert tactics == [(True, 1), (False, 2)]
 
 
+@pytest.mark.parametrize(
+    "m,n,k",
+    [
+        (4, 128, 256),
+        (128, 2304, 8192),
+        (256, 8192, 2560),
+    ],
+)
+def test_dynamic_quant_exhaustive_tactics_include_pruned_tactics(
+    m: int,
+    n: int,
+    k: int,
+    blackwell_cuda: None,
+) -> None:
+    module = gemm_base.get_trtllm_gemm_module()
+
+    for use_8x4_sf_layout in (True, False):
+        pruned = set(
+            module.trtllm_mxfp8_gemm_tactics(
+                m,
+                n,
+                k,
+                use_8x4_sf_layout,
+            )
+        )
+        exhaustive = set(
+            module.trtllm_mxfp8_gemm_tactics(
+                m,
+                n,
+                k,
+                use_8x4_sf_layout,
+                exhaustive=True,
+            )
+        )
+
+        assert pruned
+        assert pruned <= exhaustive
+
+
 def test_dynamic_quant_trace_unshuffles_trtllm_rows() -> None:
     original = torch.arange(32 * 4).reshape(32, 4)
     shuffled = shuffle_matrix_a(original, 128)

@@ -275,7 +275,8 @@ class TrtllmGenGemmRunner {
         << "Error occurred when running GEMM!";
   }
 
-  std::vector<int64_t> getValidTactics(int64_t m, int64_t n, int64_t k) const {
+  std::vector<int64_t> getValidTactics(int64_t m, int64_t n, int64_t k,
+                                       bool exhaustive = false) const {
     auto const gemm = gemm::gemm::GemmInterface();
     auto const configs = gemm.getGemmConfigs();
 
@@ -324,14 +325,16 @@ class TrtllmGenGemmRunner {
       if (gemm.isValidConfig(config, gemmData)) {
         validTactics.push_back(configIndex);
 
-        // when loop2x mma is found, only add the tactic that has loop2x mma
-        if (!findLoop2xMma) {
-          if (config.mOptions.mUseUnrollLoop2xForMma) {
-            findLoop2xMma = true;
-          }
-        } else {
-          if (!config.mOptions.mUseUnrollLoop2xForMma) {
-            break;
+        if (!exhaustive) {
+          // when loop2x mma is found, only add the tactic that has loop2x mma
+          if (!findLoop2xMma) {
+            if (config.mOptions.mUseUnrollLoop2xForMma) {
+              findLoop2xMma = true;
+            }
+          } else {
+            if (!config.mOptions.mUseUnrollLoop2xForMma) {
+              break;
+            }
           }
         }
       }
@@ -426,8 +429,9 @@ void trtllm_gemm(int64_t input_dtype_, int64_t output_dtype_, TensorView workspa
   }
 }
 
-Array<int64_t> trtllm_gemm_tactics(int64_t m, int64_t n, int64_t k, int64_t input_dtype_,
-                                   int64_t output_dtype_, bool use_8x4_sf_layout) {
+Array<int64_t> trtllm_gemm_tactics_impl(int64_t m, int64_t n, int64_t k, int64_t input_dtype_,
+                                        int64_t output_dtype_, bool use_8x4_sf_layout,
+                                        bool exhaustive) {
   auto input_dtype = static_cast<gemm::trtllm::gen::Dtype>(input_dtype_);
   auto output_dtype = static_cast<gemm::trtllm::gen::Dtype>(output_dtype_);
   TVM_FFI_CHECK(input_dtype == gemm::trtllm::gen::Dtype::E4m3 ||
@@ -445,7 +449,17 @@ Array<int64_t> trtllm_gemm_tactics(int64_t m, int64_t n, int64_t k, int64_t inpu
       .layoutA = gemm::gemm::MatrixLayout::MajorK,  // currently only support major k layout
   });
 
-  return runner.getValidTactics(m, n, k);
+  return runner.getValidTactics(m, n, k, exhaustive);
+}
+
+Array<int64_t> trtllm_gemm_tactics(int64_t m, int64_t n, int64_t k, int64_t input_dtype_,
+                                   int64_t output_dtype_, bool use_8x4_sf_layout) {
+  return trtllm_gemm_tactics_impl(m, n, k, input_dtype_, output_dtype_, use_8x4_sf_layout, false);
+}
+
+Array<int64_t> trtllm_gemm_all_tactics(int64_t m, int64_t n, int64_t k, int64_t input_dtype_,
+                                       int64_t output_dtype_, bool use_8x4_sf_layout) {
+  return trtllm_gemm_tactics_impl(m, n, k, input_dtype_, output_dtype_, use_8x4_sf_layout, true);
 }
 
 namespace trtllm_cubin_loader {
@@ -456,3 +470,4 @@ namespace trtllm_cubin_loader {
 
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_gemm, flashinfer::trtllm_gemm);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_gemm_tactics, flashinfer::trtllm_gemm_tactics);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_gemm_all_tactics, flashinfer::trtllm_gemm_all_tactics);

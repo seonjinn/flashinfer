@@ -6373,6 +6373,7 @@ class _TrtllmDynamicQuantMxfp8Runner(TunableRunner):
                 b_shape[1],
                 a_shape[1],
                 use_8x4_sf_layout,
+                exhaustive=True,
             )
         ]
 
@@ -9020,9 +9021,14 @@ def _get_trtllm_gemm_module_impl(enable_rubin: bool):
         n: int,
         k: int,
         use_8x4_sf_layout: bool,
+        *,
+        exhaustive: bool = False,
     ) -> List[int]:
+        get_tactics = (
+            op.trtllm_gemm_all_tactics if exhaustive else op.trtllm_gemm_tactics
+        )
         return list(
-            op.trtllm_gemm_tactics(
+            get_tactics(
                 m,
                 n,
                 k,
