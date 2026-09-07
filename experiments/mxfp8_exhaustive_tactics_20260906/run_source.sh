@@ -21,6 +21,12 @@ export PATCH_INCLUDE="${REPO_ROOT}/include"
 export EMPTY_AOT="${SCRATCH_ROOT}/empty-aot"
 
 cd "${REPO_ROOT}"
+HARNESS_ROOT=$(cd "${CONTROL_ROOT}/../.." && pwd)
+BENCHMARK_SCRIPT=${BENCHMARK_SCRIPT:-${HARNESS_ROOT}/benchmarks/flashinfer_benchmark.py}
+if [[ ! -f "${BENCHMARK_SCRIPT}" ]]; then
+  echo "Missing benchmark driver: ${BENCHMARK_SCRIPT}" >&2
+  exit 2
+fi
 python3 - <<'PY' > "${RESULT_ROOT}/metadata.txt"
 import platform
 
@@ -94,7 +100,7 @@ for repetition in $(seq 1 "${REPEATS}"); do
   (
     start=$(date +%s.%N)
     CUDA_VISIBLE_DEVICES="${device}" python3 "${CONTROL_ROOT}/run_with_source_jit.py" \
-      benchmarks/flashinfer_benchmark.py \
+      "${BENCHMARK_SCRIPT}" \
       --testlist "${testlist}" \
       --output_path "${output}" \
       > "${log}" 2>&1
