@@ -13,6 +13,7 @@ set -euo pipefail
 : "${EXHAUSTIVE_ROOT:?set EXHAUSTIVE_ROOT}"
 : "${PRUNED_SHA:?set PRUNED_SHA}"
 : "${EXHAUSTIVE_SHA:?set EXHAUSTIVE_SHA}"
+: "${VALIDATE_ONLY:=0}"
 
 scratch_root="/raid/scratch/${USER}/flashinfer-exhaustive-tactics/${SLURM_JOB_ID}"
 mkdir -p "${scratch_root}"
@@ -31,6 +32,11 @@ trap 'rm -rf "${scratch_root}"' EXIT
     -m pytest -q -x \
     tests/gemm/test_mm_mxfp8_dynamic_quant.py
 ) 2>&1 | tee "${RESULT_ROOT}/tests.log"
+
+if [[ "${VALIDATE_ONLY}" == "1" ]]; then
+  touch "${RESULT_ROOT}/SUCCESS"
+  exit 0
+fi
 
 (
   cd "${EXHAUSTIVE_ROOT}"

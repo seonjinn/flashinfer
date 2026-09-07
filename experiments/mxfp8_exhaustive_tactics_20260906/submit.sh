@@ -9,6 +9,8 @@ PRUNED_SHA=${PRUNED_SHA:-465a4abafb336a2f01b63e2b1e56d1c51062b7bc}
 EXHAUSTIVE_SHA=${EXHAUSTIVE_SHA:-6fab535dc01b18e37a7cdeb70c526a0dcab05aed}
 CONTAINER=${CONTAINER:-/lustre/fsw/coreai_dlalgo_llm/users/sna/containers/vllm_openai_v0271_aarch64_20260813_2688476.sqsh}
 PARTITION=${PARTITION:-gb200}
+TIME_LIMIT=${TIME_LIMIT:-04:00:00}
+VALIDATE_ONLY=${VALIDATE_ONLY:-0}
 STAMP=${STAMP:-$(date +%Y%m%d-%H%M%S)}
 RESULT_ROOT=${RESULT_ROOT:-/lustre/fsw/coreai_dlalgo_llm/users/sna/flashinfer-mxfp8-exhaustive-tactics/${STAMP}}
 
@@ -31,16 +33,18 @@ printf '%s\n' \
   "exhaustive_sha=${EXHAUSTIVE_SHA}" \
   "container=${CONTAINER}" \
   "partition=${PARTITION}" \
+  "time_limit=${TIME_LIMIT}" \
+  "validate_only=${VALIDATE_ONLY}" \
   > "${RESULT_ROOT}/submission.txt"
 
 args=(
   --account=coreai_dlalgo_llm
   --partition="${PARTITION}"
   --nodes=1
-  --time=04:00:00
+  --time="${TIME_LIMIT}"
   --job-name=coreai_dlalgo_llm-flashinfer.exhaustive-tactics
   --output="${RESULT_ROOT}/slurm-%j.out"
-  --export="ALL,CONTROL_ROOT=${CONTROL_ROOT},RESULT_ROOT=${RESULT_ROOT},PRUNED_ROOT=${PRUNED_ROOT},EXHAUSTIVE_ROOT=${EXHAUSTIVE_ROOT},PRUNED_SHA=${PRUNED_SHA},EXHAUSTIVE_SHA=${EXHAUSTIVE_SHA}"
+  --export="ALL,CONTROL_ROOT=${CONTROL_ROOT},RESULT_ROOT=${RESULT_ROOT},PRUNED_ROOT=${PRUNED_ROOT},EXHAUSTIVE_ROOT=${EXHAUSTIVE_ROOT},PRUNED_SHA=${PRUNED_SHA},EXHAUSTIVE_SHA=${EXHAUSTIVE_SHA},VALIDATE_ONLY=${VALIDATE_ONLY}"
 )
 
 if [[ "${SBATCH_TEST_ONLY:-0}" == "1" ]]; then
