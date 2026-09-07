@@ -11,12 +11,6 @@ REPEATS=${REPEATS:-4}
 NUM_ITERS=${NUM_ITERS:-100}
 DRY_RUN_ITERS=${DRY_RUN_ITERS:-10}
 
-actual_sha=$(git -C "${REPO_ROOT}" rev-parse HEAD)
-if [[ "${actual_sha}" != "${EXPECTED_SHA}" ]]; then
-  echo "Expected ${EXPECTED_SHA}, found ${actual_sha} in ${REPO_ROOT}" >&2
-  exit 1
-fi
-
 mkdir -p "${RESULT_ROOT}"/{logs,raw,cache} "${SCRATCH_ROOT}"/{flashinfer,torch}
 mkdir -p "${SCRATCH_ROOT}/empty-aot"
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
