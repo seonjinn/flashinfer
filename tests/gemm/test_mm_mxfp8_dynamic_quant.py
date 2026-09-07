@@ -114,6 +114,52 @@ def test_dynamic_quant_runner_selects_module_for_tensor_device(
     assert runner.get_cache_key_extras([]) == ((10, 3),)
 
 
+def test_dynamic_quant_runner_requests_exhaustive_tactics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tactic_queries: list[tuple[int, int, int, bool, bool]] = []
+
+    class FakeModule:
+        def trtllm_mxfp8_gemm_runner(self, use_8x4_sf_layout: bool) -> object:
+            return object()
+
+        def trtllm_mxfp8_gemm_tactics(
+            self,
+            m: int,
+            n: int,
+            k: int,
+            use_8x4_sf_layout: bool,
+            *,
+            exhaustive: bool = False,
+        ) -> list[int]:
+            tactic_queries.append((m, n, k, use_8x4_sf_layout, exhaustive))
+            return [1 if use_8x4_sf_layout else 2]
+
+    monkeypatch.setattr(
+        gemm_base,
+        "get_trtllm_gemm_module",
+        lambda device: FakeModule(),
+    )
+    monkeypatch.setattr(gemm_base, "get_compute_capability", lambda device: (10, 3))
+
+    runner = gemm_base._TrtllmDynamicQuantMxfp8Runner(torch.device("cuda:1"))
+    profile = OptimizationProfile(
+        shapes=[
+            [StaticDim(4), StaticDim(256)],
+            [StaticDim(256), StaticDim(128)],
+        ],
+        tensor_initializers=[None, None],
+    )
+
+    tactics = runner.get_valid_tactics([], profile)
+
+    assert tactic_queries == [
+        (4, 128, 256, True, True),
+        (4, 128, 256, False, True),
+    ]
+    assert tactics == [(True, 1), (False, 2)]
+
+
 def test_dynamic_quant_trace_unshuffles_trtllm_rows() -> None:
     original = torch.arange(32 * 4).reshape(32, 4)
     shuffled = shuffle_matrix_a(original, 128)
